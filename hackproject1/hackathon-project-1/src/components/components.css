@@ -13,6 +13,78 @@
   text-align: left;
 }
 
+.document-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.document-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.document-header h3 {
+  margin: 0 0 4px;
+}
+
+.document-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.document-status {
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.7);
+  padding-bottom: 8px;
+}
+
+.document-toolbar button,
+.document-toolbar select {
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: transparent;
+  color: inherit;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.document-toolbar button:hover,
+.document-toolbar select:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.document-editor {
+  min-height: 260px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  outline: none;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+
+.doc-action {
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: transparent;
+  color: inherit;
+  padding: 8px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.doc-action:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
 #workspace-components h2 {
   margin: 16px 0 8px;
 }
