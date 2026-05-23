@@ -1,7 +1,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
-import { initializeApp, getApps } from 'firebase/app'
-import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore'
+import { rtdb } from '../firebase'
+import { ref, onValue, set } from 'firebase/database'
 
 const hourLabels = Array.from({ length: 12 }, (_, index) => {
   const hour = 8 + index
@@ -12,40 +12,16 @@ const hourLabels = Array.from({ length: 12 }, (_, index) => {
 const CURRENT_EMAIL_KEY = 'calendar-current-email'
 const COLLABS_KEY = 'calendar-collaborators'
 
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
-}
-
-let firestoreDb
-function getFirestoreDb() {
-  if (typeof window === 'undefined') return null
-  if (firestoreDb) return firestoreDb
-  if (!firebaseConfig.apiKey || !firebaseConfig.projectId || !firebaseConfig.appId) return null
-
-  const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig)
-  firestoreDb = getFirestore(app)
-  return firestoreDb
-}
-
 function normalizeEmail(email) {
   return email.trim().toLowerCase()
 }
 
-function getUserDocRef(email) {
-  const db = getFirestoreDb()
-  if (!db) return null
-  return doc(db, 'calendar', 'users', normalizeEmail(email))
+function getUserSlotsRef(email) {
+  return ref(rtdb, `calendar/users/${normalizeEmail(email)}/slots`)
 }
 
-function getCollaboratorsDocRef() {
-  const db = getFirestoreDb()
-  if (!db) return null
-  return doc(db, 'calendar', 'metadata', 'collaborators')
+function getCollaboratorsRef() {
+  return ref(rtdb, 'calendar/metadata/collaborators/emails')
 }
 
 export default function Calendar() {
@@ -97,13 +73,14 @@ export default function Calendar() {
   }, [])
 
   useEffect(() => {
-    const collabRef = getCollaboratorsDocRef()
-    if (!collabRef) return
-
-    const unsubscribe = onSnapshot(collabRef, snapshot => {
-      const data = snapshot.data()
-      if (!data || !Array.isArray(data.emails)) return
-      setCollaborators(data.emails.map(normalizeEmail))
+    const collabRef = getCollaboratorsRef()
+    const unsubscribe = onValue(collabRef, snapshot => {
+      const data = snapshot.val()
+      if (!Array.isArray(data)) {
+        setCollaborators([])
+        return
+      }
+      setCollaborators(data.map(normalizeEmail))
     })
 
     return unsubscribe
@@ -121,12 +98,10 @@ export default function Calendar() {
       return
     }
 
-    const userRef = getUserDocRef(currentEmail)
-    if (!userRef) return
-
-    const unsubscribe = onSnapshot(userRef, snapshot => {
-      const data = snapshot.data()
-      setSelectedSlots(data?.slots || {})
+    const userRef = getUserSlotsRef(currentEmail)
+    const unsubscribe = onValue(userRef, snapshot => {
+      const slots = snapshot.exists() ? snapshot.val() || {} : {}
+      setSelectedSlots(slots)
     })
 
     return unsubscribe
@@ -134,11 +109,10 @@ export default function Calendar() {
 
   useEffect(() => {
     const unsubs = collaborators.map(email => {
-      const userRef = getUserDocRef(email)
-      if (!userRef) return () => {}
-      return onSnapshot(userRef, snapshot => {
-        const data = snapshot.data()
-        setCollabAvailability(prev => ({ ...prev, [email]: data?.slots || {} }))
+      const userRef = getUserSlotsRef(email)
+      return onValue(userRef, snapshot => {
+        const slots = snapshot.exists() ? snapshot.val() || {} : {}
+        setCollabAvailability(prev => ({ ...prev, [email]: slots }))
       })
     })
 
@@ -146,10 +120,9 @@ export default function Calendar() {
   }, [collaborators])
 
   const updateCollaboratorsDoc = async (emails) => {
-    const docRef = getCollaboratorsDocRef()
-    if (!docRef) return
+    const collabRef = getCollaboratorsRef()
     try {
-      await setDoc(docRef, { emails }, { merge: true })
+      await set(collabRef, emails)
     } catch {}
   }
 
@@ -158,10 +131,7 @@ export default function Calendar() {
     const slotKey = `${dayKey}-${hour}`
     setSelectedSlots(prev => {
       const next = { ...prev, [slotKey]: !prev[slotKey] }
-      const userRef = getUserDocRef(currentEmail)
-      if (userRef) {
-        setDoc(userRef, { slots: next }, { merge: true }).catch(() => {})
-      }
+      set(getUserSlotsRef(currentEmail), next).catch(() => {})
       return next
     })
   }
@@ -169,10 +139,7 @@ export default function Calendar() {
   const clearAll = () => {
     if (!currentEmail) return
     setSelectedSlots({})
-    const userRef = getUserDocRef(currentEmail)
-    if (userRef) {
-      setDoc(userRef, { slots: {} }, { merge: true }).catch(() => {})
-    }
+    set(getUserSlotsRef(currentEmail), {}).catch(() => {})
   }
 
   const signIn = (email) => {
