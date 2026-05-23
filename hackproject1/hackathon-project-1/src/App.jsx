@@ -17,7 +17,7 @@ function App() {
     { key: 'document', label: 'Document' },
     { key: 'messages', label: 'Messages' },
     { key: 'sketchpad', label: 'Sketchpad' },
-    { key: 'todo', label: 'Todo' }
+    { key: 'todo', label: 'To-Do' }
   ]
 
   const handleNewProject = () => {
@@ -42,7 +42,7 @@ function App() {
       case 'messages':
         return <Messages key={`messages-${keySuffix}`} projectKey={projectKey} />
       case 'todo':
-        return <Todo key={`todo-${keySuffix}`} projectKey={projectKey} />
+        return <ToDo key={`todo-${keySuffix}`} projectKey={projectKey} />
       case 'sketchpad':
         return <Sketchpad key={`sketchpad-${keySuffix}`} projectKey={projectKey} />
       case 'document':
