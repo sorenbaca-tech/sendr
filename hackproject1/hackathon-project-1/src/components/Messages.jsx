@@ -1,27 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { db } from '../firebase'
+import {
+  collection,
+  addDoc,
+  onSnapshot,
+  orderBy,
+  query,
+  setDoc,
+  doc,
+  getDocs,
+} from 'firebase/firestore'
 
-const STORAGE_KEY = 'messages_chat_data'
-
-function initializeStorage() {
-  const stored = localStorage.getItem(STORAGE_KEY)
-  if (stored) {
-    try {
-      return JSON.parse(stored)
-    } catch (e) {
-      console.error('Failed to parse stored messages', e)
-    }
-  }
-  return {
-    messages: [
-      { id: 1, sender: 'alice@example.com', name: 'Alice', text: 'Welcome to the group chat!', ts: Date.now() - 1000 * 60 * 60 },
-      { id: 2, sender: 'bob@example.com', name: 'Bob', text: 'Hey — excited to build this together.', ts: Date.now() - 1000 * 60 * 10 },
-    ],
-    participants: [
-      { email: 'alice@example.com', name: 'Alice' },
-      { email: 'bob@example.com', name: 'Bob' },
-    ],
-  }
-}
+const MESSAGES_COL = 'messages'
+const PARTICIPANTS_COL = 'participants'
 
 function shortNameFromEmail(email) {
   const local = email.split('@')[0] || email
@@ -48,13 +39,11 @@ function saveStoredUser(user) {
 }
 
 export default function Messages() {
-  const initialData = initializeStorage()
-  const [messages, setMessages] = useState(initialData.messages)
+  const [messages, setMessages] = useState([])
   const [value, setValue] = useState('')
   const [shareEmail, setShareEmail] = useState('')
-  const [participants, setParticipants] = useState(initialData.participants)
+  const [participants, setParticipants] = useState([])
   const [notification, setNotification] = useState('')
-  const [lastSync, setLastSync] = useState(Date.now())
   const [currentUser, setCurrentUser] = useState(() => getStoredUser())
   const [signupEmail, setSignupEmail] = useState('')
   const [signupName, setSignupName] = useState('')
@@ -63,52 +52,37 @@ export default function Messages() {
   const emailRef = useRef(null)
 
   useEffect(() => {
-    // auto-scroll to bottom on new message
     const el = listRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [messages])
 
   useEffect(() => {
-    // save to localStorage whenever messages or participants change
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ messages, participants }))
-  }, [messages, participants])
-
-  useEffect(() => {
-    // persist current user separately
     if (currentUser) saveStoredUser(currentUser)
   }, [currentUser])
 
+  // real-time messages listener
   useEffect(() => {
-    // poll localStorage for updates from other tabs/instances every 500ms
-    const interval = setInterval(() => {
-      try {
-        const stored = localStorage.getItem(STORAGE_KEY)
-        if (stored) {
-          const data = JSON.parse(stored)
-          // merge in new messages from other instances
-          if (data.messages.length > messages.length) {
-            setMessages(data.messages)
-          }
-          // merge in new participants
-          if (data.participants.length > participants.length) {
-            setParticipants(data.participants)
-          }
-        }
-      } catch (e) {
-        console.error('Failed to sync from localStorage', e)
-      }
-    }, 500)
-    return () => clearInterval(interval)
-  }, [messages.length, participants.length])
+    const q = query(collection(db, MESSAGES_COL), orderBy('ts', 'asc'))
+    const unsub = onSnapshot(q, (snap) => {
+      setMessages(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
+    })
+    return unsub
+  }, [])
 
-  function send() {
+  // load participants once
+  useEffect(() => {
+    getDocs(collection(db, PARTICIPANTS_COL)).then((snap) => {
+      setParticipants(snap.docs.map((d) => d.data()))
+    })
+  }, [])
+
+  async function send() {
     const text = value.trim()
     if (!text) return
     const sender = (currentUser && currentUser.email) || 'you@example.com'
     const name = (currentUser && currentUser.name) || 'You'
-    const m = { id: Date.now(), sender, name, text, ts: Date.now() }
-    setMessages((s) => [...s, m])
     setValue('')
+    await addDoc(collection(db, MESSAGES_COL), { sender, name, text, ts: Date.now() })
   }
 
   function onKeyDown(e) {
@@ -122,10 +96,9 @@ export default function Messages() {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
   }
 
-  function addParticipant() {
+  async function addParticipant() {
     const email = shareEmail.trim().toLowerCase()
     if (!isValidEmail(email)) {
-      // simple feedback: focus the input
       if (emailRef.current) emailRef.current.focus()
       return
     }
@@ -134,29 +107,30 @@ export default function Messages() {
       return
     }
     const name = shortNameFromEmail(email)
-    const p = { email, name }
-    setParticipants((s) => [...s, p])
     setShareEmail('')
-    // post a system message announcing join
-    const joinMsg = { id: Date.now() + 1, sender: 'system', name: 'System', text: `${name} (${email}) joined the group.`, ts: Date.now() }
-    setMessages((s) => [...s, joinMsg])
-    // mock email notification
+    await setDoc(doc(db, PARTICIPANTS_COL, email), { email, name })
+    setParticipants((s) => [...s, { email, name }])
+    await addDoc(collection(db, MESSAGES_COL), {
+      sender: 'system', name: 'System',
+      text: `${name} (${email}) joined the group.`, ts: Date.now(),
+    })
     setNotification(`Email sent to ${email} with chat access link.`)
     setTimeout(() => setNotification(''), 3000)
   }
 
-  function completeSignup(userEmail, displayName) {
+  async function completeSignup(userEmail, displayName) {
     const email = userEmail.trim().toLowerCase()
     const name = displayName.trim() || shortNameFromEmail(email)
     const u = { email, name }
     setCurrentUser(u)
-    // add to participants if missing
     if (!participants.find((p) => p.email === email)) {
+      await setDoc(doc(db, PARTICIPANTS_COL, email), { email, name })
       setParticipants((s) => [...s, { email, name }])
     }
-    // post a system message announcing the user
-    const joinMsg = { id: Date.now() + 2, sender: 'system', name: 'System', text: `${name} (${email}) joined as you.`, ts: Date.now() }
-    setMessages((s) => [...s, joinMsg])
+    await addDoc(collection(db, MESSAGES_COL), {
+      sender: 'system', name: 'System',
+      text: `${name} (${email}) joined as you.`, ts: Date.now(),
+    })
     setNotification(`Signed in as ${name} <${email}>`)
     setTimeout(() => setNotification(''), 2500)
   }
