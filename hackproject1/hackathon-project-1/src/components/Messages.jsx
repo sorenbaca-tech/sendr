@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { rtdb } from '../firebase'
-import { ref, push, onValue, set } from 'firebase/database'
+import { ref, push, onValue, set, update } from 'firebase/database'
 
 const MESSAGES_PATH = 'messages'
 const PARTICIPANTS_PATH = 'participants'
@@ -14,30 +14,32 @@ function shortNameFromEmail(email) {
   return local.replace(/[._\-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
-const USER_KEY = 'chat_user'
+function userKey(projectKey) {
+  return `chat_user_${projectKey}`
+}
 
-function getStoredUser() {
+function getStoredUser(projectKey) {
   try {
-    const s = sessionStorage.getItem(USER_KEY)
+    const s = sessionStorage.getItem(userKey(projectKey))
     return s ? JSON.parse(s) : null
   } catch (e) {
     return null
   }
 }
 
-function saveStoredUser(user) {
+function saveStoredUser(projectKey, user) {
   try {
-    sessionStorage.setItem(USER_KEY, JSON.stringify(user))
+    sessionStorage.setItem(userKey(projectKey), JSON.stringify(user))
   } catch (e) {}
 }
 
-export default function Messages() {
+export default function Messages({ projectKey = 1 }) {
   const [messages, setMessages] = useState([])
   const [value, setValue] = useState('')
   const [shareEmail, setShareEmail] = useState('')
   const [participants, setParticipants] = useState([])
   const [notification, setNotification] = useState('')
-  const [currentUser, setCurrentUser] = useState(() => getStoredUser())
+  const [currentUser, setCurrentUser] = useState(() => getStoredUser(projectKey))
   const [signupEmail, setSignupEmail] = useState('')
   const [signupName, setSignupName] = useState('')
   const [editingName, setEditingName] = useState(false)
@@ -53,8 +55,8 @@ export default function Messages() {
   }, [messages])
 
   useEffect(() => {
-    if (currentUser) saveStoredUser(currentUser)
-  }, [currentUser])
+    if (currentUser) saveStoredUser(projectKey, currentUser)
+  }, [currentUser, projectKey])
 
   useEffect(() => {
     return onValue(ref(rtdb, MESSAGES_PATH), (snap) => {
@@ -139,10 +141,18 @@ export default function Messages() {
   async function saveName() {
     const name = nameInput.trim()
     if (!name) return
-    const updated = { ...currentUser, name }
-    setCurrentUser(updated)
-    await set(ref(rtdb, `${PARTICIPANTS_PATH}/${encodeEmail(currentUser.email)}`), { email: currentUser.email, name })
+    setCurrentUser({ ...currentUser, name })
     setEditingName(false)
+
+    const patches = {}
+    messages
+      .filter((m) => m.sender === currentUser.email)
+      .forEach((m) => { patches[`${MESSAGES_PATH}/${m.id}/name`] = name })
+
+    await Promise.all([
+      set(ref(rtdb, `${PARTICIPANTS_PATH}/${encodeEmail(currentUser.email)}`), { email: currentUser.email, name }),
+      Object.keys(patches).length ? update(ref(rtdb, '/'), patches) : Promise.resolve(),
+    ])
   }
 
   if (!currentUser) {
