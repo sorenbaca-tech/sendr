@@ -39,6 +39,7 @@ export default function Document({ content = '', onContentChange }) {
   const senderIdRef = useRef(`tab-${Math.random().toString(36).slice(2, 10)}`)
   const [documentHtml, setDocumentHtml] = useState(content || '')
   const [isConnected, setIsConnected] = useState(false)
+  const [activeFormats, setActiveFormats] = useState({ bold: false, italic: false, underline: false })
 
   const saveSelection = () => {
     const editor = editorRef.current
@@ -59,6 +60,27 @@ export default function Document({ content = '', onContentChange }) {
     if (!range || !selection) return
     selection.removeAllRanges()
     selection.addRange(range)
+  }
+
+  const updateActiveFormats = () => {
+    const editor = editorRef.current
+    const selection = window.getSelection()
+    if (!editor || !selection || selection.rangeCount === 0) {
+      setActiveFormats({ bold: false, italic: false, underline: false })
+      return
+    }
+
+    const range = selection.getRangeAt(0)
+    if (!editor.contains(range.startContainer) && !editor.contains(range.endContainer)) {
+      setActiveFormats({ bold: false, italic: false, underline: false })
+      return
+    }
+
+    setActiveFormats({
+      bold: document.queryCommandState('bold'),
+      italic: document.queryCommandState('italic'),
+      underline: document.queryCommandState('underline')
+    })
   }
 
   useEffect(() => {
@@ -122,6 +144,7 @@ export default function Document({ content = '', onContentChange }) {
     normalizeFontTags()
     updateContent()
     editorRef.current?.focus()
+    updateActiveFormats()
   }
 
   const normalizeFontTags = () => {
@@ -151,6 +174,7 @@ export default function Document({ content = '', onContentChange }) {
 
   const handleInput = () => {
     updateContent()
+    updateActiveFormats()
   }
 
   const handlePaste = (event) => {
@@ -170,6 +194,15 @@ export default function Document({ content = '', onContentChange }) {
     }
   }
 
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      updateActiveFormats()
+    }
+
+    document.addEventListener('selectionchange', handleSelectionChange)
+    return () => document.removeEventListener('selectionchange', handleSelectionChange)
+  }, [])
+
   return (
     <section className="component-card document-card">
       <div className="document-header">
@@ -186,13 +219,28 @@ export default function Document({ content = '', onContentChange }) {
       </div>
 
       <div className="document-toolbar" onMouseDown={saveSelection}>
-        <button type="button" onClick={() => applyCommand('bold')} aria-label="Bold">
+        <button
+          type="button"
+          onClick={() => applyCommand('bold')}
+          aria-label="Bold"
+          className={activeFormats.bold ? 'active-format' : ''}
+        >
           Bold
         </button>
-        <button type="button" onClick={() => applyCommand('italic')} aria-label="Italic">
+        <button
+          type="button"
+          onClick={() => applyCommand('italic')}
+          aria-label="Italic"
+          className={activeFormats.italic ? 'active-format' : ''}
+        >
           Italic
         </button>
-        <button type="button" onClick={() => applyCommand('underline')} aria-label="Underline">
+        <button
+          type="button"
+          onClick={() => applyCommand('underline')}
+          aria-label="Underline"
+          className={activeFormats.underline ? 'active-format' : ''}
+        >
           Underline
         </button>
         <button type="button" onClick={() => applyCommand('insertUnorderedList')} aria-label="Bullet list">
