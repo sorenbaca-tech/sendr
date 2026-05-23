@@ -36,7 +36,6 @@ function createChannel(onMessage) {
 export default function Document({ content = '', onContentChange, projectKey }) {
   const editorRef = useRef(null)
   const channelRef = useRef(null)
-  const savedSelectionRef = useRef(null)
   const senderIdRef = useRef(`tab-${Math.random().toString(36).slice(2, 10)}`)
   const saveTimeoutRef = useRef(null)
   const [documentHtml, setDocumentHtml] = useState(content || '')
@@ -44,27 +43,7 @@ export default function Document({ content = '', onContentChange, projectKey }) 
   const [activeFormats, setActiveFormats] = useState({ bold: false, italic: false, underline: false })
   const [isSaving, setIsSaving] = useState(false)
   const [projectId] = useState(() => `project-${projectKey || 'default'}`)
-
-  const saveSelection = () => {
-    const editor = editorRef.current
-    const selection = window.getSelection()
-    if (!editor || !selection || selection.rangeCount === 0) return
-
-    const range = selection.getRangeAt(0)
-    if (!editor.contains(range.startContainer) && !editor.contains(range.endContainer)) {
-      return
-    }
-
-    savedSelectionRef.current = range.cloneRange()
-  }
-
-  const restoreSelection = () => {
-    const range = savedSelectionRef.current
-    const selection = window.getSelection()
-    if (!range || !selection) return
-    selection.removeAllRanges()
-    selection.addRange(range)
-  }
+  const placeholderText = 'Start typing your project plan here. Use the toolbar to format text, add bullet lists, select a font, and edit with other people in another browser tab.'
 
   const updateActiveFormats = () => {
     const editor = editorRef.current
@@ -179,12 +158,13 @@ export default function Document({ content = '', onContentChange, projectKey }) 
   }
 
   const applyCommand = (command, value = null) => {
-    restoreSelection()
+    const editor = editorRef.current
+    if (!editor) return
+    editor.focus()
     document.execCommand('styleWithCSS', false, true)
     document.execCommand(command, false, value)
     normalizeFontTags()
     updateContent()
-    editorRef.current?.focus()
     updateActiveFormats()
   }
 
@@ -264,7 +244,7 @@ export default function Document({ content = '', onContentChange, projectKey }) 
         </button>
       </div>
 
-      <div className="document-toolbar" onMouseDown={saveSelection}>
+      <div className="document-toolbar">
         <button
           type="button"
           onClick={() => applyCommand('bold')}
@@ -327,13 +307,13 @@ export default function Document({ content = '', onContentChange, projectKey }) 
         ref={editorRef}
         className="document-editor"
         contentEditable
+        tabIndex={0}
         spellCheck
         suppressContentEditableWarning
+        data-placeholder={placeholderText}
         onInput={handleInput}
         onPaste={handlePaste}
-      >
-        {content || 'Start typing your project plan here. Use the toolbar to format text, add bullet lists, select a font, and edit with other people in another browser tab.'}
-      </div>
+      />
     </section>
   )
 }
