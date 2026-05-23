@@ -6,6 +6,7 @@ import Messages from './components/Messages.jsx'
 import ToDo from './components/To-Do.jsx'
 import Sketchpad from './components/Sketchpad.jsx'
 import Document from './components/Document.jsx'
+import { wipeAllData } from './firebaseModules'
 
 function App() {
   const [activeTab, setActiveTab] = useState('document')
@@ -20,8 +21,13 @@ function App() {
     { key: 'todo', label: 'To-Do' }
   ]
 
-  const handleNewProject = () => {
-    // increment projectKey to force remounts and reset internal state in child components
+  const handleNewProject = async () => {
+    const confirmed = window.confirm(
+      'Start a new project? This will permanently delete the document, to-do board, sketchpad, calendar, and chat history for everyone.'
+    )
+    if (!confirmed) return
+    await wipeAllData()
+    setProjectState({})
     setProjectKey((k) => k + 1)
     setActiveTab('document')
   }

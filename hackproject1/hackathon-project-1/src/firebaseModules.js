@@ -1,5 +1,19 @@
-import { get, onValue, ref, set } from 'firebase/database'
+import { get, onValue, ref, remove, set } from 'firebase/database'
 import { rtdb } from './firebase'
+
+// Top-level RTDB paths used anywhere in the app
+const ALL_DATA_PATHS = ['projects', 'messages', 'participants', 'calendar']
+
+// Wipe every known top-level path. Used by "New Project" to start completely fresh.
+export async function wipeAllData() {
+  try {
+    await Promise.all(ALL_DATA_PATHS.map((path) => remove(ref(rtdb, path))))
+    return true
+  } catch (error) {
+    console.error('Failed to wipe Realtime Database:', error)
+    return false
+  }
+}
 
 function getProjectId(projectKey) {
   return `project-${projectKey ?? 1}`
