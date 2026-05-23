@@ -9,28 +9,59 @@ import Document from './components/Document.jsx'
 
 function App() {
   const [activeTab, setActiveTab] = useState('document')
-  const [docKey, setDocKey] = useState(1)
+  const [projectKey, setProjectKey] = useState(1)
+  const [projectState, setProjectState] = useState({})
 
-const tabs = [
-  { key: 'calendar', label: 'Calendar', component: <Calendar /> },
-  { key: 'document', label: 'Document', component: <Document /> },
-  { key: 'messages', label: 'Messages', component: <Messages /> },
-  { key: 'sketchpad', label: 'Sketchpad', component: <Sketchpad /> },
-  { key: 'todo', label: 'To-Do', component: <ToDo /> }
-]
-
-  const activeTabData = tabs.find((tab) => tab.key === activeTab) || tabs[0]
+  const tabDefs = [
+    { key: 'calendar', label: 'Calendar' },
+    { key: 'document', label: 'Document' },
+    { key: 'messages', label: 'Messages' },
+    { key: 'sketchpad', label: 'Sketchpad' },
+    { key: 'todo', label: 'Todo' }
+  ]
 
   const handleNewProject = () => {
-    // bump the document key to force a remount / fresh document
-    setDocKey((k) => k + 1)
+    // increment projectKey to force remounts and reset internal state in child components
+    setProjectKey((k) => k + 1)
     setActiveTab('document')
+  }
+
+  const saveModuleState = (moduleKey, data) => {
+    setProjectState((prev) => {
+      const proj = prev[projectKey] ? { ...prev[projectKey] } : {}
+      proj[moduleKey] = data
+      return { ...prev, [projectKey]: proj }
+    })
+  }
+
+  const renderActive = () => {
+    const keySuffix = `project-${projectKey}`
+    switch (activeTab) {
+      case 'calendar':
+        return <Calendar key={`calendar-${keySuffix}`} projectKey={projectKey} />
+      case 'messages':
+        return <Messages key={`messages-${keySuffix}`} projectKey={projectKey} />
+      case 'todo':
+        return <Todo key={`todo-${keySuffix}`} projectKey={projectKey} />
+      case 'sketchpad':
+        return <Sketchpad key={`sketchpad-${keySuffix}`} projectKey={projectKey} />
+      case 'document':
+      default:
+          return (
+            <Document
+              key={`document-${keySuffix}`}
+              projectKey={projectKey}
+              content={(projectState[projectKey] && projectState[projectKey].document) || ''}
+              onContentChange={(html) => saveModuleState('document', html)}
+            />
+          )
+    }
   }
 
   return (
     <div className="app-shell">
       <header className="app-tabs" role="tablist" aria-label="App modules tabs">
-        {tabs.map((tab) => (
+        {tabDefs.map((tab) => (
           <button
             key={tab.key}
             type="button"
@@ -54,7 +85,7 @@ const tabs = [
       </header>
 
       <main className="app-panel" role="tabpanel">
-        {activeTabData.component}
+        {renderActive()}
       </main>
     </div>
   )
