@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { loadTodoState, saveTodoState, subscribeToTodoState } from '../firebaseModules'
 
 const STORAGE_KEY = 'todo_board_data'
 
@@ -6,7 +7,10 @@ function initializeStorage() {
   const stored = localStorage.getItem(STORAGE_KEY)
   if (stored) {
     try {
-      return JSON.parse(stored)
+      const parsed = JSON.parse(stored)
+      if (parsed && Array.isArray(parsed.participants) && Array.isArray(parsed.tasks)) {
+        return parsed
+      }
     } catch (error) {
       console.error('Failed to parse stored todos', error)
     }
@@ -26,6 +30,25 @@ function initializeStorage() {
   }
 }
 
+function readStoredBoard() {
+  const stored = localStorage.getItem(STORAGE_KEY)
+  if (!stored) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(stored)
+    if (!parsed || !Array.isArray(parsed.participants) || !Array.isArray(parsed.tasks)) {
+      return null
+    }
+
+    return parsed
+  } catch (error) {
+    console.error('Failed to parse stored todo board', error)
+    return null
+  }
+}
+
 function shortNameFromEmail(email) {
   const local = email.split('@')[0] || email
   return local.replace(/[._\-]/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
@@ -40,42 +63,83 @@ function isValidEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 }
 
-export default function ToDo() {
-  const initialData = useMemo(() => initializeStorage(), [])
-  const [participants, setParticipants] = useState(initialData.participants)
-  const [tasks, setTasks] = useState(initialData.tasks)
+export default function ToDo({ projectKey = 1 }) {
+  const fallbackBoard = useMemo(() => initializeStorage(), [])
+  const [participants, setParticipants] = useState(fallbackBoard.participants)
+  const [tasks, setTasks] = useState(fallbackBoard.tasks)
   const [taskText, setTaskText] = useState('')
   const [shareEmail, setShareEmail] = useState('')
   const [notification, setNotification] = useState('')
   const [statusMessage, setStatusMessage] = useState('Everyone can edit the shared list in real time.')
+  const [isHydrated, setIsHydrated] = useState(false)
   const emailRef = useRef(null)
+  const lastSavedRef = useRef('')
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ participants, tasks }))
-  }, [participants, tasks])
+    let active = true
 
-  useEffect(() => {
-    const interval = window.setInterval(() => {
-      try {
-        const stored = localStorage.getItem(STORAGE_KEY)
-        if (!stored) {
-          return
-        }
+    const hydrate = async () => {
+      const remoteBoard = await loadTodoState(projectKey)
+      const storedBoard = readStoredBoard()
+      const nextBoard = remoteBoard || storedBoard || fallbackBoard
 
-        const data = JSON.parse(stored)
-        const current = JSON.stringify({ participants, tasks })
-        if (JSON.stringify(data) !== current) {
-          setParticipants(data.participants || participants)
-          setTasks(data.tasks || tasks)
-          setStatusMessage('Shared list updated from another tab.')
-        }
-      } catch (error) {
-        console.error('Failed to sync todo data', error)
+      if (!active) {
+        return
       }
-    }, 500)
 
-    return () => window.clearInterval(interval)
-  }, [participants, tasks])
+      setParticipants(nextBoard.participants)
+      setTasks(nextBoard.tasks)
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(nextBoard))
+      lastSavedRef.current = remoteBoard ? JSON.stringify(nextBoard) : ''
+      setIsHydrated(true)
+    }
+
+    hydrate()
+
+    const unsubscribe = subscribeToTodoState(projectKey, (remoteBoard) => {
+      if (!active) {
+        return
+      }
+
+      if (!remoteBoard) {
+        return
+      }
+
+      const remotePayload = JSON.stringify(remoteBoard)
+      if (remotePayload === lastSavedRef.current) {
+        return
+      }
+
+      setParticipants(remoteBoard.participants)
+      setTasks(remoteBoard.tasks)
+      localStorage.setItem(STORAGE_KEY, remotePayload)
+      lastSavedRef.current = remotePayload
+      setStatusMessage('Shared list updated from another tab.')
+    })
+
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [fallbackBoard, projectKey])
+
+  useEffect(() => {
+    if (!isHydrated) {
+      return undefined
+    }
+
+    const payload = JSON.stringify({ participants, tasks })
+    if (payload === lastSavedRef.current) {
+      return undefined
+    }
+
+    lastSavedRef.current = payload
+    localStorage.setItem(STORAGE_KEY, payload)
+
+    saveTodoState(projectKey, { participants, tasks })
+
+    return undefined
+  }, [isHydrated, participants, tasks, projectKey])
 
   useEffect(() => {
     if (!notification) {

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { loadSketchpadState, saveSketchpadState, subscribeToSketchpadState } from '../firebaseModules'
 
 const TOOL_OPTIONS = [
   { id: 'pen', label: 'Pen' },
@@ -30,10 +31,12 @@ const TOOL_STROKE_WIDTH = {
 
 const STORAGE_KEY = 'sketchpad-canvas-data'
 
-export default function Sketchpad() {
+export default function Sketchpad({ projectKey = 1 }) {
   const canvasRef = useRef(null)
   const wrapperRef = useRef(null)
   const saveTimerRef = useRef(null)
+  const savedDataUrlRef = useRef('')
+  const lastSavedRef = useRef('')
   const [tool, setTool] = useState('pen')
   const [color, setColor] = useState('#111111')
   const [isDrawing, setIsDrawing] = useState(false)
@@ -47,32 +50,45 @@ export default function Sketchpad() {
     setBrushSize(TOOL_STROKE_WIDTH[tool])
   }, [tool])
 
+  const drawSavedImage = (dataUrl) => {
+    const canvas = canvasRef.current
+    const wrapper = wrapperRef.current
+
+    if (!canvas || !wrapper) {
+      return
+    }
+
+    const ctx = canvas.getContext('2d')
+    if (!ctx) {
+      return
+    }
+
+    const rect = wrapper.getBoundingClientRect()
+
+    if (!dataUrl) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, rect.width, 320)
+      return
+    }
+
+    const image = new Image()
+    image.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, rect.width, 320)
+      ctx.drawImage(image, 0, 0, rect.width, 320)
+    }
+
+    image.src = dataUrl
+  }
+
   useEffect(() => {
     const canvas = canvasRef.current
     const wrapper = wrapperRef.current
 
     if (!canvas || !wrapper) {
       return undefined
-    }
-
-    const restoreSavedDrawing = () => {
-      const saved = localStorage.getItem(STORAGE_KEY)
-
-      if (!saved) {
-        return
-      }
-
-      const img = new Image()
-      img.onload = () => {
-        const ctx = canvas.getContext('2d')
-        if (!ctx) {
-          return
-        }
-
-        const rect = wrapper.getBoundingClientRect()
-        ctx.drawImage(img, 0, 0, rect.width, 320)
-      }
-      img.src = saved
     }
 
     const resizeCanvas = () => {
@@ -94,7 +110,7 @@ export default function Sketchpad() {
       ctx.lineJoin = 'round'
       ctx.fillStyle = '#ffffff'
       ctx.fillRect(0, 0, rect.width, 320)
-      restoreSavedDrawing()
+      drawSavedImage(savedDataUrlRef.current)
     }
 
     resizeCanvas()
@@ -106,14 +122,78 @@ export default function Sketchpad() {
   }, [])
 
   useEffect(() => {
-    const persist = () => {
+    let active = true
+
+    const hydrate = async () => {
+      const remoteDataUrl = await loadSketchpadState(projectKey)
+      const localDataUrl = localStorage.getItem(STORAGE_KEY)
+      const nextDataUrl = remoteDataUrl || localDataUrl || ''
+
+      if (!active) {
+        return
+      }
+
+      savedDataUrlRef.current = nextDataUrl
+      lastSavedRef.current = nextDataUrl
+
+      if (nextDataUrl) {
+        localStorage.setItem(STORAGE_KEY, nextDataUrl)
+      } else {
+        localStorage.removeItem(STORAGE_KEY)
+      }
+
+      drawSavedImage(nextDataUrl)
+    }
+
+    hydrate()
+
+    const unsubscribe = subscribeToSketchpadState(projectKey, (remoteDataUrl) => {
+      if (!active) {
+        return
+      }
+
+      const nextDataUrl = remoteDataUrl || ''
+
+      if (nextDataUrl === savedDataUrlRef.current) {
+        return
+      }
+
+      savedDataUrlRef.current = nextDataUrl
+      lastSavedRef.current = nextDataUrl
+
+      if (nextDataUrl) {
+        localStorage.setItem(STORAGE_KEY, nextDataUrl)
+      } else {
+        localStorage.removeItem(STORAGE_KEY)
+      }
+
+      drawSavedImage(nextDataUrl)
+    })
+
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [projectKey])
+
+  useEffect(() => {
+    const persist = async () => {
       const canvas = canvasRef.current
+
       if (!canvas) {
         return
       }
 
-      const saved = canvas.toDataURL('image/png')
-      localStorage.setItem(STORAGE_KEY, saved)
+      const nextDataUrl = canvas.toDataURL('image/png')
+
+      if (nextDataUrl === lastSavedRef.current) {
+        return
+      }
+
+      lastSavedRef.current = nextDataUrl
+      savedDataUrlRef.current = nextDataUrl
+      localStorage.setItem(STORAGE_KEY, nextDataUrl)
+      await saveSketchpadState(projectKey, nextDataUrl)
     }
 
     const handleVisibilityChange = () => {
@@ -135,7 +215,7 @@ export default function Sketchpad() {
       window.removeEventListener('pagehide', handlePageHide)
       window.removeEventListener('beforeunload', handlePageHide)
     }
-  }, [])
+  }, [projectKey])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -215,13 +295,22 @@ export default function Sketchpad() {
       window.clearTimeout(saveTimerRef.current)
     }
 
-    saveTimerRef.current = window.setTimeout(() => {
+    saveTimerRef.current = window.setTimeout(async () => {
       const canvas = canvasRef.current
       if (!canvas) {
         return
       }
 
-      localStorage.setItem(STORAGE_KEY, canvas.toDataURL('image/png'))
+      const nextDataUrl = canvas.toDataURL('image/png')
+
+      if (nextDataUrl === lastSavedRef.current) {
+        return
+      }
+
+      lastSavedRef.current = nextDataUrl
+      savedDataUrlRef.current = nextDataUrl
+      localStorage.setItem(STORAGE_KEY, nextDataUrl)
+      await saveSketchpadState(projectKey, nextDataUrl)
     }, 120)
   }
 
@@ -289,7 +378,7 @@ export default function Sketchpad() {
     persistCanvas()
   }
 
-  const clearCanvas = () => {
+  const clearCanvas = async () => {
     const canvas = canvasRef.current
     const wrapper = wrapperRef.current
 
@@ -305,7 +394,11 @@ export default function Sketchpad() {
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.fillStyle = '#ffffff'
     ctx.fillRect(0, 0, wrapper.getBoundingClientRect().width, 320)
+
+    savedDataUrlRef.current = ''
+    lastSavedRef.current = ''
     localStorage.removeItem(STORAGE_KEY)
+    await saveSketchpadState(projectKey, '')
   }
 
   return (
