@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { saveDocument, loadDocument } from '../documentService'
+import { saveDocument, loadDocument, subscribeToDocument, updatePresence, subscribeToPresence, removePresence } from '../documentService'
 
 const fontSizeLookup = {
   1: '10px',
@@ -42,6 +42,10 @@ export default function Document({ content = '', onContentChange, projectKey }) 
   const [isConnected, setIsConnected] = useState(false)
   const [activeFormats, setActiveFormats] = useState({ bold: false, italic: false, underline: false })
   const [isSaving, setIsSaving] = useState(false)
+  const [currentEmail, setCurrentEmail] = useState('')
+  const [emailInput, setEmailInput] = useState('')
+  const [presence, setPresence] = useState([])
+  const [lastUpdatedBy, setLastUpdatedBy] = useState('')
   const [projectId] = useState(() => `project-${projectKey || 'default'}`)
   const placeholderText = 'Start typing your project plan here. Use the toolbar to format text, add bullet lists, select a font, and edit with other people in another browser tab.'
 
@@ -91,6 +95,13 @@ export default function Document({ content = '', onContentChange, projectKey }) 
     }
   }, [onContentChange])
 
+  useEffect(() => {
+    const email = window.localStorage.getItem('documentEmail') || ''
+    if (email) {
+      setCurrentEmail(email)
+    }
+  }, [])
+
   // Load document from Firestore on mount or projectKey change
   useEffect(() => {
     const loadFromFirestore = async () => {
@@ -113,6 +124,45 @@ export default function Document({ content = '', onContentChange, projectKey }) 
 
     loadFromFirestore()
   }, [projectId, onContentChange])
+
+  useEffect(() => {
+    const unsubscribeDocument = subscribeToDocument(projectId, (data) => {
+      const editor = editorRef.current
+      if (!editor) return
+      if (data.content && data.content !== editor.innerHTML && document.activeElement !== editor) {
+        editor.innerHTML = data.content
+        setDocumentHtml(data.content)
+        setLastUpdatedBy(data.lastUpdatedBy || '')
+        if (typeof onContentChange === 'function') {
+          onContentChange(data.content)
+        }
+      }
+    })
+
+    let unsubscribePresence = () => {}
+    let interval = null
+
+    if (currentEmail) {
+      unsubscribePresence = subscribeToPresence(projectId, (items) => {
+        setPresence(items)
+      })
+
+      const refreshPresence = () => {
+        updatePresence(projectId, currentEmail)
+      }
+
+      refreshPresence()
+      interval = window.setInterval(refreshPresence, 15000)
+    }
+
+    return () => {
+      unsubscribeDocument()
+      unsubscribePresence()
+      if (interval) {
+        window.clearInterval(interval)
+      }
+    }
+  }, [projectId, currentEmail, onContentChange])
 
   useEffect(() => {
     const editor = editorRef.current
@@ -148,13 +198,13 @@ export default function Document({ content = '', onContentChange, projectKey }) 
     }
     setIsSaving(true)
     saveTimeoutRef.current = setTimeout(() => {
-      saveDocument(projectId, html)
+      saveDocument(projectId, html, currentEmail)
         .then(() => setIsSaving(false))
         .catch((err) => {
           console.error('Failed to save to Firestore:', err)
           setIsSaving(false)
         })
-    }, 1000) // Save 1 second after user stops typing
+    }, 1000)
   }
 
   const applyCommand = (command, value = null) => {
@@ -215,6 +265,35 @@ export default function Document({ content = '', onContentChange, projectKey }) 
     }
   }
 
+  const signIn = () => {
+    const email = emailInput.trim().toLowerCase()
+    if (!email || !email.includes('@')) return
+    window.localStorage.setItem('documentEmail', email)
+    setCurrentEmail(email)
+    updatePresence(projectId, email)
+  }
+
+  const signOut = async () => {
+    if (currentEmail) {
+      await removePresence(projectId, currentEmail)
+    }
+    setCurrentEmail('')
+    window.localStorage.removeItem('documentEmail')
+  }
+
+  useEffect(() => {
+    const handleUnload = () => {
+      if (currentEmail) {
+        removePresence(projectId, currentEmail)
+      }
+    }
+
+    window.addEventListener('beforeunload', handleUnload)
+    return () => {
+      window.removeEventListener('beforeunload', handleUnload)
+    }
+  }, [currentEmail, projectId])
+
   useEffect(() => {
     const handleSelectionChange = () => {
       updateActiveFormats()
@@ -242,6 +321,32 @@ export default function Document({ content = '', onContentChange, projectKey }) 
         <button type="button" className="doc-action" onClick={handleCopy}>
           Copy Text
         </button>
+      </div>
+
+      <div className="document-login-row">
+        {!currentEmail ? (
+          <div className="document-login">
+            <input
+              type="email"
+              value={emailInput}
+              onChange={(event) => setEmailInput(event.target.value)}
+              placeholder="Enter your email"
+              aria-label="Email address"
+            />
+            <button type="button" onClick={signIn}>
+              Join with Email
+            </button>
+          </div>
+        ) : (
+          <div className="document-login document-login-active">
+            <span>
+              Signed in as <strong>{currentEmail}</strong>
+            </span>
+            <button type="button" onClick={signOut}>
+              Sign Out
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="document-toolbar">
@@ -296,11 +401,12 @@ export default function Document({ content = '', onContentChange, projectKey }) 
       <div className="document-status">
         {isSaving ? (
           'Saving to Firebase...'
-        ) : isConnected ? (
-          'Collaborative editing active • Saved to Firebase'
+        ) : currentEmail ? (
+          `${presence.length} collaborator${presence.length === 1 ? '' : 's'} active • Saved to Firebase`
         ) : (
-          'Collaboration available in modern browsers'
+          'Sign in with your email to collaborate and save edits.'
         )}
+        {lastUpdatedBy ? <div>Last saved by {lastUpdatedBy}</div> : null}
       </div>
 
       <div
