@@ -10,6 +10,7 @@ import Sketchpad from './components/Sketchpad.jsx'
 import Document from './components/Document.jsx'
 
 const LS_PROJECT = 'current-project'
+const LS_IDENTITY = 'user-identity'
 
 const tabDefs = [
   { key: 'calendar', label: 'Calendar' },
@@ -28,6 +29,23 @@ function slugify(name) {
     .slice(0, 64)
 }
 
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+}
+
+// Seed the localStorage / sessionStorage keys that existing components read,
+// so Document, Messages, and Calendar pick up the identity on mount.
+function persistIdentityToComponents(identity, projectSlug) {
+  try {
+    window.localStorage.setItem('documentEmail', identity.email)
+    window.localStorage.setItem('calendar-current-email', identity.email)
+    window.sessionStorage.setItem(
+      `chat_user_${projectSlug}`,
+      JSON.stringify({ email: identity.email, name: identity.name })
+    )
+  } catch {}
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState('document')
   const [project, setProject] = useState(() => {
@@ -38,6 +56,16 @@ function App() {
       return null
     }
   })
+  const [identity, setIdentity] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(LS_IDENTITY)
+      return raw ? JSON.parse(raw) : null
+    } catch {
+      return null
+    }
+  })
+  const [nameInput, setNameInput] = useState(() => identity?.name || '')
+  const [emailInput, setEmailInput] = useState(() => identity?.email || '')
   const [projectInput, setProjectInput] = useState('')
   const [joining, setJoining] = useState(false)
   const [joinError, setJoinError] = useState('')
@@ -50,9 +78,26 @@ function App() {
     } catch {}
   }, [project])
 
+  useEffect(() => {
+    try {
+      if (identity) window.localStorage.setItem(LS_IDENTITY, JSON.stringify(identity))
+    } catch {}
+  }, [identity])
+
   const handleStartOrJoin = async () => {
-    const name = projectInput.trim()
-    const slug = slugify(name)
+    const displayName = nameInput.trim()
+    const email = emailInput.trim().toLowerCase()
+    const projectName = projectInput.trim()
+    const slug = slugify(projectName)
+
+    if (!displayName) {
+      setJoinError('Please enter your name.')
+      return
+    }
+    if (!isValidEmail(email)) {
+      setJoinError('Please enter a valid email address.')
+      return
+    }
     if (!slug) {
       setJoinError('Please enter a project name.')
       return
@@ -62,19 +107,35 @@ function App() {
     setJoinError('')
     setJoinNotice('')
 
+    const nextIdentity = { name: displayName, email }
+
     try {
       const metaRef = ref(rtdb, `projects/project-${slug}/meta`)
       const snap = await get(metaRef)
+      let resolvedName = projectName
 
       if (snap.exists()) {
         const meta = snap.val()
-        setProject({ slug, name: meta.name || name })
-        setJoinNotice(`Joined existing project "${meta.name || name}".`)
+        resolvedName = meta.name || projectName
+        setJoinNotice(`Joined existing project "${resolvedName}".`)
       } else {
-        await set(metaRef, { name, createdAt: serverTimestamp() })
-        setProject({ slug, name })
-        setJoinNotice(`Created project "${name}".`)
+        await set(metaRef, {
+          name: projectName,
+          createdAt: serverTimestamp(),
+          createdBy: { name: displayName, email },
+        })
+        setJoinNotice(`Created project "${projectName}".`)
       }
+
+      // Register membership so the project knows who's joined.
+      await set(
+        ref(rtdb, `projects/project-${slug}/members/${email.replace(/[.#$/[\]]/g, '_')}`),
+        { name: displayName, email, joinedAt: serverTimestamp() }
+      )
+
+      setIdentity(nextIdentity)
+      persistIdentityToComponents(nextIdentity, slug)
+      setProject({ slug, name: resolvedName })
       setProjectInput('')
       setActiveTab('document')
     } catch (err) {
@@ -97,23 +158,54 @@ function App() {
   }
 
   if (!project) {
+    const onEnter = (e) => {
+      if (e.key === 'Enter' && !joining) handleStartOrJoin()
+    }
     return (
       <div className="app-shell">
         <main className="app-panel" role="main">
           <section className="component-card" style={landingStyles.card}>
             <h2 style={{ margin: '0 0 8px' }}>Start or join a project</h2>
-            <p style={{ margin: '0 0 16px', color: '#555' }}>
-              Enter a project name. If someone has already started a project with that name, you'll join them.
+            <p style={{ margin: '0 0 20px', color: '#555' }}>
+              Tell us who you are, then enter a project name. If someone has already started a project with that name, you'll join them.
             </p>
-            <div style={landingStyles.row}>
+
+            <label style={landingStyles.field}>
+              <span style={landingStyles.label}>Your name</span>
               <input
-                value={projectInput}
-                onChange={(e) => setProjectInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && !joining && handleStartOrJoin()}
-                placeholder="e.g. Hackathon Project"
+                value={nameInput}
+                onChange={(e) => setNameInput(e.target.value)}
+                onKeyDown={onEnter}
+                placeholder="e.g. Megan Baca"
                 style={landingStyles.input}
                 autoFocus
               />
+            </label>
+
+            <label style={landingStyles.field}>
+              <span style={landingStyles.label}>Your email</span>
+              <input
+                type="email"
+                value={emailInput}
+                onChange={(e) => setEmailInput(e.target.value)}
+                onKeyDown={onEnter}
+                placeholder="you@example.com"
+                style={landingStyles.input}
+              />
+            </label>
+
+            <label style={landingStyles.field}>
+              <span style={landingStyles.label}>Project name</span>
+              <input
+                value={projectInput}
+                onChange={(e) => setProjectInput(e.target.value)}
+                onKeyDown={onEnter}
+                placeholder="e.g. Hackathon Project"
+                style={landingStyles.input}
+              />
+            </label>
+
+            <div style={landingStyles.actionRow}>
               <button
                 type="button"
                 onClick={handleStartOrJoin}
@@ -123,6 +215,7 @@ function App() {
                 {joining ? 'Connecting…' : 'Start / Join'}
               </button>
             </div>
+
             {joinError && <p style={landingStyles.error}>{joinError}</p>}
             {joinNotice && <p style={landingStyles.notice}>{joinNotice}</p>}
           </section>
@@ -167,6 +260,12 @@ function App() {
         <div style={projectChrome.bar}>
           <span style={projectChrome.label}>
             Project: <strong>{project.name}</strong>
+            {identity && (
+              <>
+                {' · '}
+                <span title={identity.email}>{identity.name}</span>
+              </>
+            )}
           </span>
           <button
             type="button"
@@ -188,14 +287,15 @@ function App() {
 
 const landingStyles = {
   card: { padding: 24, maxWidth: 520, margin: '64px auto' },
-  row: { display: 'flex', gap: 8 },
+  field: { display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 14 },
+  label: { fontSize: '0.85rem', color: '#374151', fontWeight: 500 },
   input: {
-    flex: 1,
     padding: '10px 12px',
     borderRadius: 8,
     border: '1px solid #d1d5db',
     fontSize: '1rem',
   },
+  actionRow: { display: 'flex', justifyContent: 'flex-end', marginTop: 4 },
   primaryBtn: {
     padding: '10px 18px',
     borderRadius: 8,
