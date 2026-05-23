@@ -1,3 +1,4 @@
+
 import React, { useEffect, useMemo, useState } from 'react'
 
 const hourLabels = Array.from({ length: 12 }, (_, index) => {
@@ -6,24 +7,115 @@ const hourLabels = Array.from({ length: 12 }, (_, index) => {
   return { hour, label }
 })
 
-const STORAGE_KEY = 'calendar-selected-slots'
+const STORAGE_KEY_PREFIX = 'calendar-selected-slots:'
+const CURRENT_EMAIL_KEY = 'calendar-current-email'
+const COLLABS_KEY = 'calendar-collaborators'
+
+function storageKeyForEmail(email) {
+  return `${STORAGE_KEY_PREFIX}${email}`
+}
 
 export default function Calendar() {
-  const [selectedSlots, setSelectedSlots] = useState(() => {
-    if (typeof window === 'undefined') {
-      return {}
-    }
-
+  const [currentEmail, setCurrentEmail] = useState(() => {
+    if (typeof window === 'undefined') return ''
     try {
-      const stored = window.localStorage.getItem(STORAGE_KEY)
-      return stored ? JSON.parse(stored) : {}
+      return window.localStorage.getItem(CURRENT_EMAIL_KEY) || ''
     } catch {
-      return {}
+      return ''
     }
   })
 
+  const [selectedSlots, setSelectedSlots] = useState({})
+  const [collaborators, setCollaborators] = useState(() => {
+    if (typeof window === 'undefined') return []
+    try {
+      const raw = window.localStorage.getItem(COLLABS_KEY)
+      return raw ? JSON.parse(raw) : []
+    } catch {
+      return []
+    }
+  })
+
+  const [collabAvailability, setCollabAvailability] = useState({})
+
+  const [today, setToday] = useState(() => new Date())
+
+  useEffect(() => {
+    const now = new Date()
+    const nextMidnight = new Date(now)
+    nextMidnight.setHours(24, 0, 0, 0)
+    const timeout = window.setTimeout(() => setToday(new Date()), nextMidnight.getTime() - now.getTime())
+
+    return () => window.clearTimeout(timeout)
+  }, [])
+
+  // Load current user's slots when email changes
+  useEffect(() => {
+    if (!currentEmail) {
+      setSelectedSlots({})
+      return
+    }
+
+    try {
+      const raw = window.localStorage.getItem(storageKeyForEmail(currentEmail))
+      setSelectedSlots(raw ? JSON.parse(raw) : {})
+    } catch {
+      setSelectedSlots({})
+    }
+    try {
+      window.localStorage.setItem(CURRENT_EMAIL_KEY, currentEmail)
+    } catch {}
+  }, [currentEmail])
+
+  // Persist collaborators list
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(COLLABS_KEY, JSON.stringify(collaborators))
+    } catch {}
+  }, [collaborators])
+
+  // Load collaborators' availability whenever collaborators change
+  useEffect(() => {
+    const map = {}
+    collaborators.forEach(email => {
+      try {
+        const raw = window.localStorage.getItem(storageKeyForEmail(email))
+        map[email] = raw ? JSON.parse(raw) : {}
+      } catch {
+        map[email] = {}
+      }
+    })
+    setCollabAvailability(map)
+  }, [collaborators])
+
+  // Listen for other tabs updating availability
+  useEffect(() => {
+    function handleStorage(e) {
+      if (!e.key) return
+      if (e.key.startsWith(STORAGE_KEY_PREFIX)) {
+        const email = e.key.slice(STORAGE_KEY_PREFIX.length)
+        try {
+          const parsed = e.newValue ? JSON.parse(e.newValue) : {}
+          if (email === currentEmail) setSelectedSlots(parsed)
+          if (collaborators.includes(email)) {
+            setCollabAvailability(prev => ({ ...prev, [email]: parsed }))
+          }
+        } catch {}
+      }
+      if (e.key === COLLABS_KEY) {
+        try {
+          const parsed = e.newValue ? JSON.parse(e.newValue) : []
+          setCollaborators(parsed)
+        } catch {}
+      }
+    }
+
+    window.addEventListener('storage', handleStorage)
+    return () => window.removeEventListener('storage', handleStorage)
+  }, [currentEmail, collaborators])
+
   const days = useMemo(() => {
-    const start = new Date()
+    const start = new Date(today)
     return Array.from({ length: 7 }, (_, index) => {
       const date = new Date(start)
       date.setDate(start.getDate() + index)
@@ -35,84 +127,124 @@ export default function Calendar() {
       })
       return { key, label }
     })
-  }, [])
-
-  const otherUsers = useMemo(() => {
-    const [monday, tuesday, wednesday, thursday, friday, saturday, sunday] = days.map(d => d.key)
-    return [
-      {
-        name: 'Alex',
-        availability: new Set([
-          `${monday}-9`,
-          `${monday}-10`,
-          `${tuesday}-14`,
-          `${wednesday}-11`,
-          `${thursday}-16`,
-          `${friday}-10`,
-          `${saturday}-9`,
-          `${sunday}-13`,
-        ]),
-      },
-      {
-        name: 'Riley',
-        availability: new Set([
-          `${monday}-12`,
-          `${tuesday}-11`,
-          `${tuesday}-15`,
-          `${wednesday}-9`,
-          `${thursday}-10`,
-          `${friday}-14`,
-          `${sunday}-16`,
-        ]),
-      },
-      {
-        name: 'Jordan',
-        availability: new Set([
-          `${monday}-8`,
-          `${wednesday}-13`,
-          `${wednesday}-14`,
-          `${thursday}-9`,
-          `${friday}-11`,
-          `${friday}-12`,
-          `${saturday}-15`,
-        ]),
-      },
-    ]
-  }, [days])
+  }, [today])
 
   const toggleSlot = (dayKey, hour) => {
+    if (!currentEmail) return
     const slotKey = `${dayKey}-${hour}`
     setSelectedSlots(prev => {
-      const next = {
-        ...prev,
-        [slotKey]: !prev[slotKey],
-      }
+      const next = { ...prev, [slotKey]: !prev[slotKey] }
+      try {
+        window.localStorage.setItem(storageKeyForEmail(currentEmail), JSON.stringify(next))
+      } catch {}
+      return next
+    })
+  }
 
-      if (typeof window !== 'undefined') {
-        try {
-          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
-        } catch {
-          // Ignore write errors in private mode or restricted environments
-        }
-      }
+  const clearAll = () => {
+    if (!currentEmail) return
+    setSelectedSlots({})
+    try {
+      window.localStorage.removeItem(storageKeyForEmail(currentEmail))
+    } catch {}
+  }
 
+  const signIn = (email) => {
+    setCurrentEmail(email.trim().toLowerCase())
+  }
+
+  const signOut = () => {
+    setCurrentEmail('')
+  }
+
+  const addCollaborator = (email) => {
+    const normalized = email.trim().toLowerCase()
+    if (!normalized) return
+    if (collaborators.includes(normalized) || normalized === currentEmail) return
+    setCollaborators(prev => [...prev, normalized])
+  }
+
+  const removeCollaborator = (email) => {
+    setCollaborators(prev => prev.filter(e => e !== email))
+    setCollabAvailability(prev => {
+      const next = { ...prev }
+      delete next[email]
       return next
     })
   }
 
   const selectedCount = Object.values(selectedSlots).filter(Boolean).length
 
+  const [signInInput, setSignInInput] = useState('')
+  const [collabInput, setCollabInput] = useState('')
+
   return (
     <section className="component-card" style={{ padding: '16px', minWidth: '100%' }}>
-      <div style={{ marginBottom: '16px' }}>
-        <h3 style={{ margin: '0 0 8px 0' }}>Calendar</h3>
-        <p style={{ margin: 0 }}>
-          Click each hourly slot when you are free. Selected slots become your available project hours.
-        </p>
+      <div style={{ marginBottom: '12px', display: 'flex', gap: '12px', alignItems: 'center' }}>
+        <div>
+          <h3 style={{ margin: '0 0 8px 0' }}>Calendar</h3>
+          <p style={{ margin: 0 }}>
+            Sign in with your email to save and share availability.
+          </p>
+        </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px', alignItems: 'center' }}>
+          {currentEmail ? (
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <div style={{ fontSize: '0.95rem', color: '#111' }}>{currentEmail}</div>
+              <button onClick={signOut} style={{ padding: '6px 10px', borderRadius: 8 }}>Sign out</button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <input
+                value={signInInput}
+                onChange={e => setSignInInput(e.target.value)}
+                placeholder="you@example.com"
+                style={{ padding: '6px 8px', borderRadius: 8, border: '1px solid #d1d5db' }}
+              />
+              <button
+                onClick={() => { signIn(signInInput); setSignInInput('') }}
+                style={{ padding: '6px 10px', borderRadius: 8 }}
+              >
+                Sign in
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
-      <div style={{ marginBottom: '12px', color: '#333', fontWeight: 500 }}>
-        Your selected free slots: {selectedCount}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+        <div style={{ color: '#333', fontWeight: 500 }}>
+          Your selected free slots: {selectedCount}
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={clearAll}
+            style={{
+              padding: '8px 14px',
+              borderRadius: '8px',
+              border: '1px solid #d1d5db',
+              background: '#fff',
+              color: '#111827',
+              cursor: 'pointer',
+            }}
+          >
+            Clear all
+          </button>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: '12px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <input
+          value={collabInput}
+          onChange={e => setCollabInput(e.target.value)}
+          placeholder="add collaborator email"
+          style={{ padding: '6px 8px', borderRadius: 8, border: '1px solid #d1d5db', flex: '0 0 320px' }}
+        />
+        <button onClick={() => { addCollaborator(collabInput); setCollabInput('') }} style={{ padding: '6px 10px', borderRadius: 8 }}>
+          Add collaborator
+        </button>
+        <div style={{ marginLeft: 'auto', color: '#555' }}>{collaborators.length} collaborators</div>
       </div>
 
       <div style={{ overflowX: 'auto', marginBottom: '24px' }}>
@@ -175,10 +307,11 @@ export default function Calendar() {
                           borderRadius: '8px',
                           background: isSelected ? '#3b82f6' : '#fff',
                           color: isSelected ? '#fff' : '#333',
-                          cursor: 'pointer',
-                          transition: 'background 150ms ease, transform 150ms ease',
+                          cursor: currentEmail ? 'pointer' : 'not-allowed',
+                          opacity: currentEmail ? 1 : 0.7,
                         }}
                         aria-pressed={isSelected}
+                        disabled={!currentEmail}
                       >
                         {isSelected ? 'Free' : 'Busy'}
                       </button>
@@ -199,93 +332,101 @@ export default function Calendar() {
       </div>
 
       <div style={{ display: 'grid', gap: '18px' }}>
-        {otherUsers.map(user => (
-          <div
-            key={user.name}
-            style={{
-              border: '1px solid #e5e7eb',
-              borderRadius: '12px',
-              padding: '12px',
-              background: '#fbfbfb',
-            }}
-          >
-            <div style={{ marginBottom: '10px', fontWeight: 600, color: '#111' }}>
-              {user.name}
-            </div>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '720px' }}>
-                <thead>
-                  <tr>
-                    <th
-                      style={{
-                        textAlign: 'left',
-                        padding: '8px 6px',
-                        borderBottom: '2px solid #ddd',
-                        background: '#f9fafb',
-                        position: 'sticky',
-                        top: 0,
-                        zIndex: 1,
-                      }}
-                    >
-                      Time
-                    </th>
-                    {days.map(day => (
+        {collaborators.map(email => {
+          const availability = collabAvailability[email] || {}
+          const displayName = email.split('@')[0]
+          return (
+            <div
+              key={email}
+              style={{
+                border: '1px solid #e5e7eb',
+                borderRadius: '12px',
+                padding: '12px',
+                background: '#fbfbfb',
+              }}
+            >
+              <div style={{ marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ fontWeight: 600, color: '#111' }}>{displayName}</div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <div style={{ fontSize: '0.85rem', color: '#6b7280' }}>{email}</div>
+                  <button onClick={() => removeCollaborator(email)} style={{ padding: '6px 8px', borderRadius: 8 }}>Remove</button>
+                </div>
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '720px' }}>
+                  <thead>
+                    <tr>
                       <th
-                        key={day.key}
                         style={{
-                          textAlign: 'center',
+                          textAlign: 'left',
                           padding: '8px 6px',
                           borderBottom: '2px solid #ddd',
                           background: '#f9fafb',
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 1,
                         }}
                       >
-                        {day.label}
+                        Time
                       </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {hourLabels.map(({ hour, label }) => (
-                    <tr key={`${user.name}-${hour}`}>
-                      <td
-                        style={{
-                          padding: '8px 6px',
-                          borderBottom: '1px solid #eee',
-                          fontWeight: 500,
-                          width: '120px',
-                        }}
-                      >
-                        {label}
-                      </td>
-                      {days.map(day => {
-                        const isFree = user.availability.has(`${day.key}-${hour}`)
-                        return (
-                          <td key={`${user.name}-${day.key}-${hour}`} style={{ padding: '6px 4px', borderBottom: '1px solid #eee' }}>
-                            <div
-                              style={{
-                                width: '100%',
-                                minHeight: '36px',
-                                borderRadius: '8px',
-                                background: isFree ? '#10b981' : '#f3f4f6',
-                                color: isFree ? '#fff' : '#6b7280',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                fontSize: '0.85rem',
-                              }}
-                            >
-                              {isFree ? 'Free' : 'Busy'}
-                            </div>
-                          </td>
-                        )
-                      })}
+                      {days.map(day => (
+                        <th
+                          key={day.key}
+                          style={{
+                            textAlign: 'center',
+                            padding: '8px 6px',
+                            borderBottom: '2px solid #ddd',
+                            background: '#f9fafb',
+                          }}
+                        >
+                          {day.label}
+                        </th>
+                      ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {hourLabels.map(({ hour, label }) => (
+                      <tr key={`${email}-${hour}`}>
+                        <td
+                          style={{
+                            padding: '8px 6px',
+                            borderBottom: '1px solid #eee',
+                            fontWeight: 500,
+                            width: '120px',
+                          }}
+                        >
+                          {label}
+                        </td>
+                        {days.map(day => {
+                          const isFree = !!availability[`${day.key}-${hour}`]
+                          return (
+                            <td key={`${email}-${day.key}-${hour}`} style={{ padding: '6px 4px', borderBottom: '1px solid #eee' }}>
+                              <div
+                                style={{
+                                  width: '100%',
+                                  minHeight: '36px',
+                                  borderRadius: '8px',
+                                  background: isFree ? '#10b981' : '#f3f4f6',
+                                  color: isFree ? '#fff' : '#6b7280',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  fontSize: '0.85rem',
+                                }}
+                              >
+                                {isFree ? 'Free' : 'Busy'}
+                              </div>
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </section>
   )
