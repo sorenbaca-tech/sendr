@@ -1,17 +1,16 @@
-import { doc, getDoc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore'
 import { get, onValue, ref, set } from 'firebase/database'
-import { db, rtdb } from './firebase'
+import { rtdb } from './firebase'
 
 function getProjectId(projectKey) {
   return `project-${projectKey ?? 1}`
 }
 
-function getModuleDoc(projectKey, moduleName) {
-  return doc(db, 'projects', getProjectId(projectKey), 'modules', moduleName)
-}
-
 function getSketchpadRef(projectKey) {
   return ref(rtdb, `projects/${getProjectId(projectKey)}/modules/sketchpad`)
+}
+
+function getTodoRef(projectKey) {
+  return ref(rtdb, `projects/${getProjectId(projectKey)}/modules/todo`)
 }
 
 export async function loadSketchpadState(projectKey) {
@@ -71,38 +70,48 @@ export async function saveSketchpadState(projectKey, dataUrl) {
 
 export async function loadTodoState(projectKey) {
   try {
-    const snapshot = await getDoc(getModuleDoc(projectKey, 'todo'))
+    const snapshot = await get(getTodoRef(projectKey))
 
     if (!snapshot.exists()) {
       return null
     }
 
-    const data = snapshot.data()
+    const data = snapshot.val()
+
+    if (!data || !Array.isArray(data.participants) || !Array.isArray(data.tasks)) {
+      return null
+    }
 
     return {
-      participants: Array.isArray(data.participants) ? data.participants : [],
-      tasks: Array.isArray(data.tasks) ? data.tasks : []
+      participants: data.participants,
+      tasks: data.tasks
     }
   } catch (error) {
-    console.error('Failed to load todo state from Firebase:', error)
+    console.error('Failed to load todo state from Realtime Database:', error)
     return null
   }
 }
 
 export function subscribeToTodoState(projectKey, callback) {
   try {
-    const unsubscribe = onSnapshot(
-      getModuleDoc(projectKey, 'todo'),
+    return onValue(
+      getTodoRef(projectKey),
       (snapshot) => {
         if (!snapshot.exists()) {
           callback(null)
           return
         }
 
-        const data = snapshot.data()
+        const data = snapshot.val()
+
+        if (!data || !Array.isArray(data.participants) || !Array.isArray(data.tasks)) {
+          callback(null)
+          return
+        }
+
         callback({
-          participants: Array.isArray(data.participants) ? data.participants : [],
-          tasks: Array.isArray(data.tasks) ? data.tasks : []
+          participants: data.participants,
+          tasks: data.tasks
         })
       },
       (error) => {
@@ -110,8 +119,6 @@ export function subscribeToTodoState(projectKey, callback) {
         callback(null)
       }
     )
-
-    return unsubscribe
   } catch (error) {
     console.error('Failed to set up todo subscription:', error)
     return () => {}
@@ -120,20 +127,16 @@ export function subscribeToTodoState(projectKey, callback) {
 
 export async function saveTodoState(projectKey, boardData) {
   try {
-    await setDoc(
-      getModuleDoc(projectKey, 'todo'),
-      {
-        participants: Array.isArray(boardData.participants) ? boardData.participants : [],
-        tasks: Array.isArray(boardData.tasks) ? boardData.tasks : [],
-        lastUpdatedAt: serverTimestamp(),
-        updatedAtLocal: new Date().toISOString()
-      },
-      { merge: true }
-    )
+    await set(getTodoRef(projectKey), {
+      participants: Array.isArray(boardData.participants) ? boardData.participants : [],
+      tasks: Array.isArray(boardData.tasks) ? boardData.tasks : [],
+      lastUpdatedAt: Date.now(),
+      updatedAtLocal: new Date().toISOString()
+    })
 
     return true
   } catch (error) {
-    console.error('Failed to save todo state to Firebase:', error)
+    console.error('Failed to save todo state to Realtime Database:', error)
     return false
   }
 }
