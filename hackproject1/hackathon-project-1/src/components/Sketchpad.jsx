@@ -28,9 +28,12 @@ const TOOL_STROKE_WIDTH = {
   eraser: 28
 }
 
+const STORAGE_KEY = 'sketchpad-canvas-data'
+
 export default function Sketchpad() {
   const canvasRef = useRef(null)
   const wrapperRef = useRef(null)
+  const saveTimerRef = useRef(null)
   const [tool, setTool] = useState('pen')
   const [color, setColor] = useState('#111111')
   const [isDrawing, setIsDrawing] = useState(false)
@@ -52,6 +55,26 @@ export default function Sketchpad() {
       return undefined
     }
 
+    const restoreSavedDrawing = () => {
+      const saved = localStorage.getItem(STORAGE_KEY)
+
+      if (!saved) {
+        return
+      }
+
+      const img = new Image()
+      img.onload = () => {
+        const ctx = canvas.getContext('2d')
+        if (!ctx) {
+          return
+        }
+
+        const rect = wrapper.getBoundingClientRect()
+        ctx.drawImage(img, 0, 0, rect.width, 320)
+      }
+      img.src = saved
+    }
+
     const resizeCanvas = () => {
       const ratio = window.devicePixelRatio || 1
       const rect = wrapper.getBoundingClientRect()
@@ -71,6 +94,7 @@ export default function Sketchpad() {
       ctx.lineJoin = 'round'
       ctx.fillStyle = '#ffffff'
       ctx.fillRect(0, 0, rect.width, 320)
+      restoreSavedDrawing()
     }
 
     resizeCanvas()
@@ -79,6 +103,38 @@ export default function Sketchpad() {
     resizeObserver.observe(wrapper)
 
     return () => resizeObserver.disconnect()
+  }, [])
+
+  useEffect(() => {
+    const persist = () => {
+      const canvas = canvasRef.current
+      if (!canvas) {
+        return
+      }
+
+      const saved = canvas.toDataURL('image/png')
+      localStorage.setItem(STORAGE_KEY, saved)
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        persist()
+      }
+    }
+
+    const handlePageHide = () => {
+      persist()
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('pagehide', handlePageHide)
+    window.addEventListener('beforeunload', handlePageHide)
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('pagehide', handlePageHide)
+      window.removeEventListener('beforeunload', handlePageHide)
+    }
   }, [])
 
   useEffect(() => {
@@ -154,6 +210,21 @@ export default function Sketchpad() {
     ctx.stroke()
   }
 
+  const persistCanvas = () => {
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current)
+    }
+
+    saveTimerRef.current = window.setTimeout(() => {
+      const canvas = canvasRef.current
+      if (!canvas) {
+        return
+      }
+
+      localStorage.setItem(STORAGE_KEY, canvas.toDataURL('image/png'))
+    }, 120)
+  }
+
   const startDrawing = (event) => {
     const point = getPoint(event)
 
@@ -175,6 +246,7 @@ export default function Sketchpad() {
     ctx.arc(point.x, point.y, brushSize / 2, 0, Math.PI * 2)
     ctx.fill()
     canvas.__lastPoint = point
+    persistCanvas()
   }
 
   const continueDrawing = (event) => {
@@ -204,6 +276,7 @@ export default function Sketchpad() {
     }
 
     canvas.__lastPoint = point
+    persistCanvas()
   }
 
   const stopDrawing = () => {
@@ -212,6 +285,8 @@ export default function Sketchpad() {
     if (canvasRef.current) {
       canvasRef.current.__lastPoint = null
     }
+
+    persistCanvas()
   }
 
   const clearCanvas = () => {
@@ -230,6 +305,7 @@ export default function Sketchpad() {
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.fillStyle = '#ffffff'
     ctx.fillRect(0, 0, wrapper.getBoundingClientRect().width, 320)
+    localStorage.removeItem(STORAGE_KEY)
   }
 
   return (
