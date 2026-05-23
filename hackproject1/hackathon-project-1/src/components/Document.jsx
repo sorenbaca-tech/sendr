@@ -1,15 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { saveDocument, loadDocument, subscribeToDocument, updatePresence, subscribeToPresence, removePresence } from '../documentService'
-
-const fontSizeLookup = {
-  1: '10px',
-  2: '12px',
-  3: '16px',
-  4: '18px',
-  5: '24px',
-  6: '32px',
-  7: '48px'
-}
+import {
+  saveDocument,
+  subscribeToDocument,
+  updatePresence,
+  subscribeToPresence,
+  removePresence
+} from '../documentService'
 
 const fontFamilies = [
   { value: 'Arial, sans-serif', label: 'Sans Serif' },
@@ -18,51 +14,80 @@ const fontFamilies = [
   { value: 'Comic Sans MS, cursive', label: 'Cursive' }
 ]
 
-function createChannel(onMessage) {
-  if (typeof BroadcastChannel === 'undefined') {
-    return null
-  }
+// Per-tab client id so we can ignore RTDB echoes of our own writes
+const CLIENT_ID = `client-${Math.random().toString(36).slice(2, 10)}`
 
-  const channel = new BroadcastChannel('document-collab')
-  channel.onmessage = (event) => {
-    const payload = event.data
-    if (payload?.type === 'SYNC_DOCUMENT' && typeof payload.html === 'string') {
-      onMessage(payload.html, payload.sender)
-    }
-  }
-  return channel
-}
-
-export default function Document({ content = '', onContentChange, projectKey }) {
+export default function Document({ onContentChange, projectKey }) {
   const editorRef = useRef(null)
-  const channelRef = useRef(null)
-  const senderIdRef = useRef(`tab-${Math.random().toString(36).slice(2, 10)}`)
   const saveTimeoutRef = useRef(null)
-  const [documentHtml, setDocumentHtml] = useState(content || '')
-  const [isConnected, setIsConnected] = useState(false)
+  const hasLoadedRef = useRef(false)
   const [activeFormats, setActiveFormats] = useState({ bold: false, italic: false, underline: false })
-  const [isSaving, setIsSaving] = useState(false)
+  const [status, setStatus] = useState('Loading…')
   const [currentEmail, setCurrentEmail] = useState('')
   const [emailInput, setEmailInput] = useState('')
   const [presence, setPresence] = useState([])
   const [lastUpdatedBy, setLastUpdatedBy] = useState('')
-  const [projectId] = useState(() => `project-${projectKey || 'default'}`)
-  const placeholderText = 'Start typing your project plan here. Use the toolbar to format text, add bullet lists, select a font, and edit with other people in another browser tab.'
+  const projectId = `project-${projectKey || 'default'}`
+  const placeholderText =
+    'Start typing your project plan here. Use the toolbar to format text, add bullet lists, select a font, and edit with other people in another browser tab.'
+
+  // Restore previously-signed-in email
+  useEffect(() => {
+    const saved = window.localStorage.getItem('documentEmail') || ''
+    if (saved) setCurrentEmail(saved)
+  }, [])
+
+  // Single RTDB subscription: handles both initial load and live updates
+  useEffect(() => {
+    hasLoadedRef.current = false
+    const unsubscribe = subscribeToDocument(projectId, (data) => {
+      const editor = editorRef.current
+      if (!editor) return
+
+      // After we've loaded once, ignore echoes of our own writes
+      if (hasLoadedRef.current && data.clientId === CLIENT_ID) {
+        setLastUpdatedBy(data.lastUpdatedBy || '')
+        return
+      }
+
+      const remoteContent = data.content || ''
+      if (remoteContent !== editor.innerHTML) {
+        const selection = saveSelection(editor)
+        editor.innerHTML = remoteContent
+        restoreSelection(editor, selection)
+      }
+      setLastUpdatedBy(data.lastUpdatedBy || '')
+      hasLoadedRef.current = true
+      setStatus('Saved')
+    })
+
+    return () => {
+      unsubscribe()
+    }
+  }, [projectId])
+
+  // Presence: track who's currently in the document
+  useEffect(() => {
+    if (!currentEmail) {
+      setPresence([])
+      return
+    }
+    updatePresence(projectId, currentEmail)
+    const unsubscribe = subscribeToPresence(projectId, setPresence)
+    const interval = window.setInterval(() => {
+      updatePresence(projectId, currentEmail)
+    }, 15000)
+    const handleUnload = () => removePresence(projectId, currentEmail)
+    window.addEventListener('beforeunload', handleUnload)
+    return () => {
+      unsubscribe()
+      clearInterval(interval)
+      window.removeEventListener('beforeunload', handleUnload)
+      handleUnload()
+    }
+  }, [projectId, currentEmail])
 
   const updateActiveFormats = () => {
-    const editor = editorRef.current
-    const selection = window.getSelection()
-    if (!editor || !selection || selection.rangeCount === 0) {
-      setActiveFormats({ bold: false, italic: false, underline: false })
-      return
-    }
-
-    const range = selection.getRangeAt(0)
-    if (!editor.contains(range.startContainer) && !editor.contains(range.endContainer)) {
-      setActiveFormats({ bold: false, italic: false, underline: false })
-      return
-    }
-
     setActiveFormats({
       bold: document.queryCommandState('bold'),
       italic: document.queryCommandState('italic'),
@@ -70,141 +95,17 @@ export default function Document({ content = '', onContentChange, projectKey }) 
     })
   }
 
-  useEffect(() => {
-    const channel = createChannel((html, senderId) => {
-      if (senderId === senderIdRef.current) return
-      const editor = editorRef.current
-      if (!editor) return
-      if (html !== editor.innerHTML) {
-        editor.innerHTML = html
-        setDocumentHtml(html)
-        if (typeof onContentChange === 'function') {
-          onContentChange(html)
-        }
-      }
-      setIsConnected(true)
-    })
-
-    if (channel) {
-      channelRef.current = channel
-      setIsConnected(true)
-    }
-
-    return () => {
-      channel?.close()
-    }
-  }, [onContentChange])
-
-  useEffect(() => {
-    const email = window.localStorage.getItem('documentEmail') || ''
-    if (email) {
-      setCurrentEmail(email)
-    }
-  }, [])
-
-  // Load document from Firestore on mount or projectKey change
-  useEffect(() => {
-    const loadFromFirestore = async () => {
-      try {
-        const firebaseContent = await loadDocument(projectId)
-        if (firebaseContent) {
-          const editor = editorRef.current
-          if (editor && firebaseContent !== editor.innerHTML) {
-            editor.innerHTML = firebaseContent
-            setDocumentHtml(firebaseContent)
-            if (typeof onContentChange === 'function') {
-              onContentChange(firebaseContent)
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Failed to load document from Firestore:', error)
-      }
-    }
-
-    loadFromFirestore()
-  }, [projectId, onContentChange])
-
-  useEffect(() => {
-    const unsubscribeDocument = subscribeToDocument(projectId, (data) => {
-      const editor = editorRef.current
-      if (!editor) return
-      if (data.content && data.content !== editor.innerHTML && document.activeElement !== editor) {
-        editor.innerHTML = data.content
-        setDocumentHtml(data.content)
-        setLastUpdatedBy(data.lastUpdatedBy || '')
-        if (typeof onContentChange === 'function') {
-          onContentChange(data.content)
-        }
-      }
-    })
-
-    let unsubscribePresence = () => {}
-    let interval = null
-
-    if (currentEmail) {
-      unsubscribePresence = subscribeToPresence(projectId, (items) => {
-        setPresence(items)
-      })
-
-      const refreshPresence = () => {
-        updatePresence(projectId, currentEmail)
-      }
-
-      refreshPresence()
-      interval = window.setInterval(refreshPresence, 15000)
-    }
-
-    return () => {
-      unsubscribeDocument()
-      unsubscribePresence()
-      if (interval) {
-        window.clearInterval(interval)
-      }
-    }
-  }, [projectId, currentEmail, onContentChange])
-
-  useEffect(() => {
-    const editor = editorRef.current
-    if (editor && content && content !== editor.innerHTML) {
-      editor.innerHTML = content
-      setDocumentHtml(content)
-    }
-  }, [content])
-
-  const broadcastContent = (html) => {
-    const channel = channelRef.current
-    if (!channel) return
-    channel.postMessage({
-      type: 'SYNC_DOCUMENT',
-      html,
-      sender: senderIdRef.current
-    })
-  }
-
-  const updateContent = () => {
+  const queueSave = () => {
     const editor = editorRef.current
     if (!editor) return
     const html = editor.innerHTML
-    setDocumentHtml(html)
-    broadcastContent(html)
-    if (typeof onContentChange === 'function') {
-      onContentChange(html)
-    }
-
-    // Debounce Firestore save
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current)
-    }
-    setIsSaving(true)
-    saveTimeoutRef.current = setTimeout(() => {
-      saveDocument(projectId, html, currentEmail)
-        .then(() => setIsSaving(false))
-        .catch((err) => {
-          console.error('Failed to save to Firestore:', err)
-          setIsSaving(false)
-        })
-    }, 1000)
+    if (typeof onContentChange === 'function') onContentChange(html)
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
+    setStatus('Saving…')
+    saveTimeoutRef.current = setTimeout(async () => {
+      const ok = await saveDocument(projectId, html, currentEmail, CLIENT_ID)
+      setStatus(ok ? 'Saved' : 'Save failed')
+    }, 500)
   }
 
   const applyCommand = (command, value = null) => {
@@ -213,45 +114,30 @@ export default function Document({ content = '', onContentChange, projectKey }) 
     editor.focus()
     document.execCommand('styleWithCSS', false, true)
     document.execCommand(command, false, value)
-    normalizeFontTags()
-    updateContent()
     updateActiveFormats()
-  }
-
-  const normalizeFontTags = () => {
-    const editor = editorRef.current
-    if (!editor) return
-    const fonts = editor.querySelectorAll('font[size]')
-    fonts.forEach((font) => {
-      const size = font.getAttribute('size')
-      const span = document.createElement('span')
-      span.style.fontSize = fontSizeLookup[size] || '16px'
-      span.innerHTML = font.innerHTML
-      font.replaceWith(span)
-    })
-  }
-
-  const handleFontSize = (event) => {
-    const sizeValue = event.target.value
-    if (!sizeValue) return
-    const sizeKey = sizeValue === 'normal' ? '3' : sizeValue
-    applyCommand('fontSize', sizeKey)
-  }
-
-  const handleFontFamily = (event) => {
-    const font = event.target.value
-    applyCommand('fontName', font)
+    queueSave()
   }
 
   const handleInput = () => {
-    updateContent()
     updateActiveFormats()
+    queueSave()
   }
 
   const handlePaste = (event) => {
     event.preventDefault()
     const text = event.clipboardData.getData('text/plain')
     document.execCommand('insertText', false, text)
+    queueSave()
+  }
+
+  const handleFontSize = (event) => {
+    const sizeValue = event.target.value
+    if (!sizeValue) return
+    applyCommand('fontSize', sizeValue === 'normal' ? '3' : sizeValue)
+  }
+
+  const handleFontFamily = (event) => {
+    applyCommand('fontName', event.target.value)
   }
 
   const handleCopy = async () => {
@@ -270,43 +156,14 @@ export default function Document({ content = '', onContentChange, projectKey }) 
     if (!email || !email.includes('@')) return
     window.localStorage.setItem('documentEmail', email)
     setCurrentEmail(email)
-    updatePresence(projectId, email)
+    setEmailInput('')
   }
 
   const signOut = async () => {
-    if (currentEmail) {
-      await removePresence(projectId, currentEmail)
-    }
+    if (currentEmail) await removePresence(projectId, currentEmail)
     setCurrentEmail('')
     window.localStorage.removeItem('documentEmail')
   }
-
-  useEffect(() => {
-    const handleUnload = () => {
-      if (currentEmail) {
-        removePresence(projectId, currentEmail)
-      }
-    }
-
-    window.addEventListener('beforeunload', handleUnload)
-    return () => {
-      window.removeEventListener('beforeunload', handleUnload)
-    }
-  }, [currentEmail, projectId])
-
-  useEffect(() => {
-    const handleSelectionChange = () => {
-      updateActiveFormats()
-    }
-
-    document.addEventListener('selectionchange', handleSelectionChange)
-    return () => {
-      document.removeEventListener('selectionchange', handleSelectionChange)
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current)
-      }
-    }
-  }, [])
 
   return (
     <section className="component-card document-card">
@@ -399,13 +256,10 @@ export default function Document({ content = '', onContentChange, projectKey }) 
       </div>
 
       <div className="document-status">
-        {isSaving ? (
-          'Saving to Firebase...'
-        ) : currentEmail ? (
-          `${presence.length} collaborator${presence.length === 1 ? '' : 's'} active • Saved to Firebase`
-        ) : (
-          'Sign in with your email to collaborate and save edits.'
-        )}
+        {status}
+        {currentEmail
+          ? ` • ${presence.length} collaborator${presence.length === 1 ? '' : 's'} active`
+          : ' • Sign in with your email to collaborate.'}
         {lastUpdatedBy ? <div>Last saved by {lastUpdatedBy}</div> : null}
       </div>
 
@@ -419,7 +273,49 @@ export default function Document({ content = '', onContentChange, projectKey }) 
         data-placeholder={placeholderText}
         onInput={handleInput}
         onPaste={handlePaste}
+        onKeyUp={updateActiveFormats}
+        onMouseUp={updateActiveFormats}
       />
     </section>
   )
+}
+
+// Save the current selection as plain character offsets within `container`
+function saveSelection(container) {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0) return null
+  const range = selection.getRangeAt(0)
+  if (!container.contains(range.startContainer)) return null
+  const pre = range.cloneRange()
+  pre.selectNodeContents(container)
+  pre.setEnd(range.startContainer, range.startOffset)
+  const start = pre.toString().length
+  return { start, end: start + range.toString().length }
+}
+
+// Restore a selection saved by saveSelection() after innerHTML was replaced
+function restoreSelection(container, saved) {
+  if (!saved) return
+  const selection = window.getSelection()
+  if (!selection) return
+  const range = document.createRange()
+  let charIndex = 0
+  let started = false
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT)
+  let node = walker.nextNode()
+  while (node) {
+    const next = charIndex + node.length
+    if (!started && saved.start >= charIndex && saved.start <= next) {
+      range.setStart(node, saved.start - charIndex)
+      started = true
+    }
+    if (started && saved.end >= charIndex && saved.end <= next) {
+      range.setEnd(node, saved.end - charIndex)
+      selection.removeAllRanges()
+      selection.addRange(range)
+      return
+    }
+    charIndex = next
+    node = walker.nextNode()
+  }
 }
