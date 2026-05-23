@@ -28,6 +28,25 @@ function shortNameFromEmail(email) {
   return local.replace(/[._\-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
+const USER_KEY = 'chat_user'
+
+function getStoredUser() {
+  try {
+    const s = sessionStorage.getItem(USER_KEY)
+    return s ? JSON.parse(s) : null
+  } catch (e) {
+    return null
+  }
+}
+
+function saveStoredUser(user) {
+  try {
+    sessionStorage.setItem(USER_KEY, JSON.stringify(user))
+  } catch (e) {
+    // ignore
+  }
+}
+
 export default function Messages() {
   const initialData = initializeStorage()
   const [messages, setMessages] = useState(initialData.messages)
@@ -36,6 +55,9 @@ export default function Messages() {
   const [participants, setParticipants] = useState(initialData.participants)
   const [notification, setNotification] = useState('')
   const [lastSync, setLastSync] = useState(Date.now())
+  const [currentUser, setCurrentUser] = useState(() => getStoredUser())
+  const [signupEmail, setSignupEmail] = useState('')
+  const [signupName, setSignupName] = useState('')
 
   const listRef = useRef(null)
   const emailRef = useRef(null)
@@ -50,6 +72,11 @@ export default function Messages() {
     // save to localStorage whenever messages or participants change
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ messages, participants }))
   }, [messages, participants])
+
+  useEffect(() => {
+    // persist current user separately
+    if (currentUser) saveStoredUser(currentUser)
+  }, [currentUser])
 
   useEffect(() => {
     // poll localStorage for updates from other tabs/instances every 500ms
@@ -77,7 +104,9 @@ export default function Messages() {
   function send() {
     const text = value.trim()
     if (!text) return
-    const m = { id: Date.now(), sender: 'you@example.com', name: 'You', text, ts: Date.now() }
+    const sender = (currentUser && currentUser.email) || 'you@example.com'
+    const name = (currentUser && currentUser.name) || 'You'
+    const m = { id: Date.now(), sender, name, text, ts: Date.now() }
     setMessages((s) => [...s, m])
     setValue('')
   }
@@ -114,6 +143,60 @@ export default function Messages() {
     // mock email notification
     setNotification(`Email sent to ${email} with chat access link.`)
     setTimeout(() => setNotification(''), 3000)
+  }
+
+  function completeSignup(userEmail, displayName) {
+    const email = userEmail.trim().toLowerCase()
+    const name = displayName.trim() || shortNameFromEmail(email)
+    const u = { email, name }
+    setCurrentUser(u)
+    // add to participants if missing
+    if (!participants.find((p) => p.email === email)) {
+      setParticipants((s) => [...s, { email, name }])
+    }
+    // post a system message announcing the user
+    const joinMsg = { id: Date.now() + 2, sender: 'system', name: 'System', text: `${name} (${email}) joined as you.`, ts: Date.now() }
+    setMessages((s) => [...s, joinMsg])
+    setNotification(`Signed in as ${name} <${email}>`)
+    setTimeout(() => setNotification(''), 2500)
+  }
+
+  if (!currentUser) {
+    return (
+      <section className="component-card messages-wrapper">
+        <style>{`
+          .messages-wrapper { display:flex; flex-direction:column; height:360px; }
+          .signup { display:flex; flex-direction:column; gap:8px; padding:16px }
+          .signup input { padding:8px 10px; border:1px solid var(--border); border-radius:6px; background:var(--code-bg); color:var(--text-h) }
+          .signup button { padding:8px 12px; border-radius:6px; background:var(--accent); color:white; border:none; align-self:flex-end }
+        `}</style>
+
+        <div className="signup">
+          <h3>Sign in to Chat</h3>
+          <input
+            aria-label="Your email"
+            placeholder="you@example.com"
+            value={signupEmail}
+            onChange={(e) => setSignupEmail(e.target.value)}
+          />
+          <input
+            aria-label="Display name"
+            placeholder="How should others see you?"
+            value={signupName}
+            onChange={(e) => setSignupName(e.target.value)}
+          />
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              type="button"
+              onClick={() => completeSignup(signupEmail, signupName)}
+              disabled={!isValidEmail(signupEmail)}
+            >
+              Join Chat
+            </button>
+          </div>
+        </div>
+      </section>
+    )
   }
 
   return (
@@ -165,7 +248,7 @@ export default function Messages() {
               </div>
             )
           }
-          const isYou = m.sender === 'you@example.com'
+          const isYou = currentUser && m.sender === currentUser.email
           return (
             <div key={m.id} className={isYou ? 'message you' : 'message'}>
               <div className="meta">{m.name || shortNameFromEmail(m.sender)} · {new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
