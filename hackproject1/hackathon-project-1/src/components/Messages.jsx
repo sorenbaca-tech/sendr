@@ -1,9 +1,27 @@
 import React, { useEffect, useRef, useState } from 'react'
 
-const sample = [
-  { id: 1, sender: 'alice@example.com', name: 'Alice', text: 'Welcome to the group chat!', ts: Date.now() - 1000 * 60 * 60 },
-  { id: 2, sender: 'bob@example.com', name: 'Bob', text: 'Hey — excited to build this together.', ts: Date.now() - 1000 * 60 * 10 },
-]
+const STORAGE_KEY = 'messages_chat_data'
+
+function initializeStorage() {
+  const stored = localStorage.getItem(STORAGE_KEY)
+  if (stored) {
+    try {
+      return JSON.parse(stored)
+    } catch (e) {
+      console.error('Failed to parse stored messages', e)
+    }
+  }
+  return {
+    messages: [
+      { id: 1, sender: 'alice@example.com', name: 'Alice', text: 'Welcome to the group chat!', ts: Date.now() - 1000 * 60 * 60 },
+      { id: 2, sender: 'bob@example.com', name: 'Bob', text: 'Hey — excited to build this together.', ts: Date.now() - 1000 * 60 * 10 },
+    ],
+    participants: [
+      { email: 'alice@example.com', name: 'Alice' },
+      { email: 'bob@example.com', name: 'Bob' },
+    ],
+  }
+}
 
 function shortNameFromEmail(email) {
   const local = email.split('@')[0] || email
@@ -11,18 +29,13 @@ function shortNameFromEmail(email) {
 }
 
 export default function Messages() {
-  const [messages, setMessages] = useState(sample)
+  const initialData = initializeStorage()
+  const [messages, setMessages] = useState(initialData.messages)
   const [value, setValue] = useState('')
   const [shareEmail, setShareEmail] = useState('')
-  const [participants, setParticipants] = useState(() => {
-    // derive participants from sample messages
-    const map = {}
-    sample.forEach((m) => {
-      map[m.sender] = { email: m.sender, name: m.name || shortNameFromEmail(m.sender) }
-    })
-    return Object.values(map)
-  })
+  const [participants, setParticipants] = useState(initialData.participants)
   const [notification, setNotification] = useState('')
+  const [lastSync, setLastSync] = useState(Date.now())
 
   const listRef = useRef(null)
   const emailRef = useRef(null)
@@ -32,6 +45,34 @@ export default function Messages() {
     const el = listRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [messages])
+
+  useEffect(() => {
+    // save to localStorage whenever messages or participants change
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ messages, participants }))
+  }, [messages, participants])
+
+  useEffect(() => {
+    // poll localStorage for updates from other tabs/instances every 500ms
+    const interval = setInterval(() => {
+      try {
+        const stored = localStorage.getItem(STORAGE_KEY)
+        if (stored) {
+          const data = JSON.parse(stored)
+          // merge in new messages from other instances
+          if (data.messages.length > messages.length) {
+            setMessages(data.messages)
+          }
+          // merge in new participants
+          if (data.participants.length > participants.length) {
+            setParticipants(data.participants)
+          }
+        }
+      } catch (e) {
+        console.error('Failed to sync from localStorage', e)
+      }
+    }, 500)
+    return () => clearInterval(interval)
+  }, [messages.length, participants.length])
 
   function send() {
     const text = value.trim()
