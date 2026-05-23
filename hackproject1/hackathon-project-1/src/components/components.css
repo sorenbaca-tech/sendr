@@ -1,0 +1,18 @@
+.components-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  padding: 24px;
+}
+
+.component-card {
+  border: 1px solid var(--border);
+  padding: 16px;
+  border-radius: 8px;
+  background: var(--code-bg);
+  text-align: left;
+}
+
+#workspace-components h2 {
+  margin: 16px 0 8px;
+}

@@ -3,6 +3,12 @@ import reactLogo from './assets/react.svg'
 import viteLogo from './assets/vite.svg'
 import heroImg from './assets/hero.png'
 import './App.css'
+import './components/components.css'
+import Calendar from './components/Calendar.jsx'
+import Messages from './components/Messages.jsx'
+import Todo from './components/Todo.jsx'
+import Sketchpad from './components/Sketchpad.jsx'
+import Document from './components/Document.jsx'
 
 function App() {
   const [count, setCount] = useState(0)
@@ -24,7 +30,7 @@ function App() {
         <button
           type="button"
           className="counter"
-          onClick={() => setCount((count) => count + 10)}
+          onClick={() => setCount((count) => count + 2)}
         >
           Count is {count}
         </button>
@@ -114,6 +120,18 @@ function App() {
       </section>
 
       <div className="ticks"></div>
+
+      <section id="workspace-components">
+        <h2>App Modules</h2>
+        <div className="components-grid">
+          <Calendar />
+          <Messages />
+          <Todo />
+          <Sketchpad />
+          <Document />
+        </div>
+      </section>
+
       <section id="spacer"></section>
     </>
   )
