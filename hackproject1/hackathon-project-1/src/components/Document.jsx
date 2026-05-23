@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { saveDocument, loadDocument } from '../documentService'
 
 const fontSizeLookup = {
   1: '10px',
@@ -32,14 +33,17 @@ function createChannel(onMessage) {
   return channel
 }
 
-export default function Document({ content = '', onContentChange }) {
+export default function Document({ content = '', onContentChange, projectKey }) {
   const editorRef = useRef(null)
   const channelRef = useRef(null)
   const savedSelectionRef = useRef(null)
   const senderIdRef = useRef(`tab-${Math.random().toString(36).slice(2, 10)}`)
+  const saveTimeoutRef = useRef(null)
   const [documentHtml, setDocumentHtml] = useState(content || '')
   const [isConnected, setIsConnected] = useState(false)
   const [activeFormats, setActiveFormats] = useState({ bold: false, italic: false, underline: false })
+  const [isSaving, setIsSaving] = useState(false)
+  const [projectId] = useState(() => `project-${projectKey || 'default'}`)
 
   const saveSelection = () => {
     const editor = editorRef.current
@@ -108,6 +112,29 @@ export default function Document({ content = '', onContentChange }) {
     }
   }, [onContentChange])
 
+  // Load document from Firestore on mount or projectKey change
+  useEffect(() => {
+    const loadFromFirestore = async () => {
+      try {
+        const firebaseContent = await loadDocument(projectId)
+        if (firebaseContent) {
+          const editor = editorRef.current
+          if (editor && firebaseContent !== editor.innerHTML) {
+            editor.innerHTML = firebaseContent
+            setDocumentHtml(firebaseContent)
+            if (typeof onContentChange === 'function') {
+              onContentChange(firebaseContent)
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Failed to load document from Firestore:', error)
+      }
+    }
+
+    loadFromFirestore()
+  }, [projectId, onContentChange])
+
   useEffect(() => {
     const editor = editorRef.current
     if (editor && content && content !== editor.innerHTML) {
@@ -135,6 +162,20 @@ export default function Document({ content = '', onContentChange }) {
     if (typeof onContentChange === 'function') {
       onContentChange(html)
     }
+
+    // Debounce Firestore save
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current)
+    }
+    setIsSaving(true)
+    saveTimeoutRef.current = setTimeout(() => {
+      saveDocument(projectId, html)
+        .then(() => setIsSaving(false))
+        .catch((err) => {
+          console.error('Failed to save to Firestore:', err)
+          setIsSaving(false)
+        })
+    }, 1000) // Save 1 second after user stops typing
   }
 
   const applyCommand = (command, value = null) => {
@@ -200,7 +241,12 @@ export default function Document({ content = '', onContentChange }) {
     }
 
     document.addEventListener('selectionchange', handleSelectionChange)
-    return () => document.removeEventListener('selectionchange', handleSelectionChange)
+    return () => {
+      document.removeEventListener('selectionchange', handleSelectionChange)
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current)
+      }
+    }
   }, [])
 
   return (
@@ -268,7 +314,13 @@ export default function Document({ content = '', onContentChange }) {
       </div>
 
       <div className="document-status">
-        {isConnected ? 'Collaborative editing active' : 'Collaboration available in modern browsers'}
+        {isSaving ? (
+          'Saving to Firebase...'
+        ) : isConnected ? (
+          'Collaborative editing active • Saved to Firebase'
+        ) : (
+          'Collaboration available in modern browsers'
+        )}
       </div>
 
       <div
