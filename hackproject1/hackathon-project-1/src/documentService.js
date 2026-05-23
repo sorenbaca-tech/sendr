@@ -2,12 +2,12 @@ import { rtdb } from './firebase'
 import { ref, set, get, onValue, remove, child, serverTimestamp, query, orderByChild } from 'firebase/database'
 
 // Save document content to Realtime Database
-export async function saveDocument(projectId, content, email, clientId) {
+export async function saveDocument(projectId, content, email, displayName, clientId) {
   try {
     const docRef = ref(rtdb, `projects/${projectId}/documents/main`)
     await set(docRef, {
       content,
-      lastUpdatedBy: email || 'anonymous',
+      lastUpdatedBy: displayName || email || 'anonymous',
       lastUpdatedAt: Date.now(),
       updatedAtISO: new Date().toISOString(),
       clientId: clientId || ''
@@ -54,12 +54,13 @@ export function subscribeToDocument(projectId, callback) {
 }
 
 // Update user presence in Realtime Database
-export async function updatePresence(projectId, email) {
+export async function updatePresence(projectId, email, displayName) {
   if (!email) return
   try {
     const presenceRef = ref(rtdb, `projects/${projectId}/presence/${email.replace(/\./g, '_')}`)
     await set(presenceRef, {
       email,
+      name: displayName || '',
       lastSeen: Date.now(),
       activeAt: new Date().toISOString()
     })

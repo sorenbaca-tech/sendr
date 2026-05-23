@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import { onValue, ref, remove, set } from 'firebase/database'
 import { rtdb } from '../firebase'
-import { ref, onValue, set, remove } from 'firebase/database'
 
 const START_HOUR = 8
 const END_HOUR = 20
@@ -13,11 +13,37 @@ const HOURS = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => {
   return { hour, label: `${display}:00 ${suffix}` }
 })
 
-const LS_EMAIL = 'calendar-current-email'
-
-const normalize = (email) => email.trim().toLowerCase()
+const normalize = (email) => (email || '').trim().toLowerCase()
 const emailKey = (email) => normalize(email).replace(/[.#$/[\]]/g, '_')
 const slotKey = (dayKey, hour) => `${dayKey}-${hour}`
+
+function getStoredIdentity() {
+  try {
+    const stored = localStorage.getItem('user-identity')
+    if (!stored) {
+      return null
+    }
+
+    const parsed = JSON.parse(stored)
+    if (parsed && typeof parsed.email === 'string') {
+      return parsed
+    }
+  } catch (error) {
+    console.error('Failed to parse shared identity', error)
+  }
+
+  return null
+}
+
+function getDisplayName(name, email) {
+  const trimmed = typeof name === 'string' ? name.trim() : ''
+  if (trimmed) {
+    return trimmed
+  }
+
+  const fallback = typeof email === 'string' ? email.split('@')[0] : 'Project member'
+  return fallback || 'Project member'
+}
 
 function buildWeek(from) {
   const start = new Date(from)
@@ -36,36 +62,32 @@ function buildWeek(from) {
   })
 }
 
-export default function Calendar() {
-  const [currentEmail, setCurrentEmail] = useState(() => {
-    try {
-      return window.localStorage.getItem(LS_EMAIL) || ''
-    } catch {
-      return ''
-    }
-  })
-  const [signInInput, setSignInInput] = useState('')
-  const [collabInput, setCollabInput] = useState('')
-
+export default function Calendar({ projectKey = 1 }) {
+  const [currentEmail, setCurrentEmail] = useState(() => getStoredIdentity()?.email || '')
+  const [currentName, setCurrentName] = useState(() => getStoredIdentity()?.name || '')
   const [mySlots, setMySlots] = useState({})
   const [collaborators, setCollaborators] = useState([])
   const [collabSlots, setCollabSlots] = useState({})
-
   const [weekStart, setWeekStart] = useState(() => new Date())
+
   const days = useMemo(() => buildWeek(weekStart), [weekStart])
 
   useEffect(() => {
-    try {
-      if (currentEmail) window.localStorage.setItem(LS_EMAIL, currentEmail)
-      else window.localStorage.removeItem(LS_EMAIL)
-    } catch {}
-  }, [currentEmail])
+    const identity = getStoredIdentity()
+    if (identity?.email) {
+      setCurrentEmail(identity.email)
+    }
+    if (identity?.name) {
+      setCurrentName(identity.name)
+    }
+  }, [])
 
   useEffect(() => {
     if (!currentEmail) {
       setMySlots({})
       return
     }
+
     const r = ref(rtdb, `calendar/users/${emailKey(currentEmail)}/slots`)
     return onValue(r, (snap) => {
       const val = snap.val()
@@ -74,104 +96,72 @@ export default function Calendar() {
   }, [currentEmail])
 
   useEffect(() => {
-    if (!currentEmail) {
-      setCollaborators([])
-      return
-    }
-    const r = ref(rtdb, `calendar/users/${emailKey(currentEmail)}/collaborators`)
-    return onValue(r, (snap) => {
-      const val = snap.val()
-      if (!val) {
-        setCollaborators([])
-        return
-      }
-      const list = Array.isArray(val)
-        ? val
-        : Object.values(val)
-      setCollaborators(list.filter((e) => typeof e === 'string' && e).map(normalize))
+    const membersRef = ref(rtdb, `projects/project-${projectKey}/members`)
+
+    return onValue(membersRef, (snapshot) => {
+      const data = snapshot.val() || {}
+      const members = Object.values(data)
+        .filter((member) => member && typeof member === 'object')
+        .map((member) => ({
+          email: normalize(member.email),
+          name: typeof member.name === 'string' ? member.name.trim() : '',
+        }))
+        .filter((member) => member.email)
+        .filter((member) => member.email !== normalize(currentEmail))
+
+      setCollaborators(members)
     })
-  }, [currentEmail])
+  }, [currentEmail, projectKey])
 
   useEffect(() => {
     if (!collaborators.length) {
       setCollabSlots({})
       return
     }
-    const unsubs = collaborators.map((email) => {
-      const r = ref(rtdb, `calendar/users/${emailKey(email)}/slots`)
+
+    const unsubs = collaborators.map((member) => {
+      const r = ref(rtdb, `calendar/users/${emailKey(member.email)}/slots`)
       return onValue(r, (snap) => {
         const val = snap.val()
         setCollabSlots((prev) => ({
           ...prev,
-          [email]: val && typeof val === 'object' ? val : {},
+          [member.email]: val && typeof val === 'object' ? val : {},
         }))
       })
     })
+
     return () => unsubs.forEach((u) => u && u())
   }, [collaborators])
 
   const toggleSlot = (dayKey, hour) => {
-    if (!currentEmail) return
+    if (!currentEmail) {
+      return
+    }
+
     const key = slotKey(dayKey, hour)
     const next = { ...mySlots }
-    if (next[key]) delete next[key]
-    else next[key] = true
+
+    if (next[key]) {
+      delete next[key]
+    } else {
+      next[key] = true
+    }
+
     setMySlots(next)
     set(ref(rtdb, `calendar/users/${emailKey(currentEmail)}/slots`), next).catch((err) =>
-      console.error('Failed to save slot:', err),
+      console.error('Failed to save slot:', err)
     )
   }
 
   const clearAll = () => {
-    if (!currentEmail) return
-    setMySlots({})
-    remove(ref(rtdb, `calendar/users/${emailKey(currentEmail)}/slots`)).catch((err) =>
-      console.error('Failed to clear slots:', err),
-    )
-  }
-
-  const signIn = () => {
-    const email = normalize(signInInput)
-    if (!email || !email.includes('@')) return
-    setCurrentEmail(email)
-    setSignInInput('')
-  }
-
-  const signOut = () => {
-    setCurrentEmail('')
-    setMySlots({})
-    setCollaborators([])
-    setCollabSlots({})
-  }
-
-  const persistCollaborators = (list) => {
-    set(ref(rtdb, `calendar/users/${emailKey(currentEmail)}/collaborators`), list).catch((err) =>
-      console.error('Failed to save collaborators:', err),
-    )
-  }
-
-  const addCollaborator = () => {
-    const email = normalize(collabInput)
-    if (!email || !email.includes('@')) return
-    if (email === currentEmail || collaborators.includes(email)) {
-      setCollabInput('')
+    if (!currentEmail) {
       return
     }
-    const next = [...collaborators, email]
-    setCollaborators(next)
-    persistCollaborators(next)
-    setCollabInput('')
-  }
 
-  const removeCollaborator = (email) => {
-    const next = collaborators.filter((e) => e !== email)
-    setCollaborators(next)
-    persistCollaborators(next)
-    setCollabSlots((prev) => {
-      const copy = { ...prev }
-      delete copy[email]
-      return copy
-    })
+    setMySlots({})
+    remove(ref(rtdb, `calendar/users/${emailKey(currentEmail)}/slots`)).catch((err) =>
+      console.error('Failed to clear slots:', err)
+    )
   }
 
   const shiftWeek = (delta) => {
@@ -187,20 +177,8 @@ export default function Calendar() {
       <section className="component-card" style={styles.card}>
         <h3 style={{ margin: '0 0 8px' }}>Calendar</h3>
         <p style={{ margin: '0 0 12px', color: '#555' }}>
-          Sign in with your email to mark your free hours and share with collaborators.
+          Waiting for your project identity to load so your calendar can sync automatically.
         </p>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input
-            value={signInInput}
-            onChange={(e) => setSignInInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && signIn()}
-            placeholder="you@example.com"
-            style={styles.input}
-          />
-          <button onClick={signIn} style={styles.primaryBtn}>
-            Sign in
-          </button>
-        </div>
       </section>
     )
   }
@@ -211,18 +189,13 @@ export default function Calendar() {
         <div>
           <h3 style={{ margin: '0 0 4px' }}>Calendar</h3>
           <div style={{ fontSize: '0.9rem', color: '#555' }}>
-            Signed in as <strong>{currentEmail}</strong> · {selectedCount} free slot
+            Syncing with <strong>{getDisplayName(currentName, currentEmail)}</strong> · {selectedCount} free slot
             {selectedCount === 1 ? '' : 's'}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={clearAll} style={styles.ghostBtn}>
-            Clear all
-          </button>
-          <button onClick={signOut} style={styles.ghostBtn}>
-            Sign out
-          </button>
-        </div>
+        <button onClick={clearAll} style={styles.ghostBtn}>
+          Clear all
+        </button>
       </header>
 
       <div style={styles.weekNav}>
@@ -244,34 +217,23 @@ export default function Calendar() {
         onToggle={toggleSlot}
       />
 
-      <div style={styles.collabBar}>
-        <input
-          value={collabInput}
-          onChange={(e) => setCollabInput(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && addCollaborator()}
-          placeholder="add collaborator email"
-          style={{ ...styles.input, flex: '0 0 320px' }}
-        />
-        <button onClick={addCollaborator} style={styles.primaryBtn}>
-          Add collaborator
-        </button>
-        <span style={{ marginLeft: 'auto', color: '#666' }}>
-          {collaborators.length} collaborator{collaborators.length === 1 ? '' : 's'}
-        </span>
+      <div style={{ fontSize: '0.9rem', color: '#555', marginBottom: 12 }}>
+        Everyone in this project is included automatically.
       </div>
 
-      {collaborators.map((email) => (
-        <div key={email} style={styles.collabCard}>
+      {collaborators.length === 0 ? (
+        <p style={{ margin: '0 0 12px', color: '#6b7280' }}>Waiting for project members to appear.</p>
+      ) : null}
+
+      {collaborators.map((member) => (
+        <div key={member.email} style={styles.collabCard}>
           <div style={styles.collabCardHeader}>
             <div>
-              <div style={{ fontWeight: 600 }}>{email.split('@')[0]}</div>
-              <div style={{ fontSize: '0.8rem', color: '#6b7280' }}>{email}</div>
+              <div style={{ fontWeight: 600 }}>{getDisplayName(member.name, member.email)}</div>
+              <div style={{ fontSize: '0.8rem', color: '#6b7280' }}>{member.email}</div>
             </div>
-            <button onClick={() => removeCollaborator(email)} style={styles.ghostBtn}>
-              Remove
-            </button>
           </div>
-          <CalendarGrid days={days} slots={collabSlots[email] || {}} />
+          <CalendarGrid days={days} slots={collabSlots[member.email] || {}} />
         </div>
       ))}
     </section>
@@ -316,6 +278,7 @@ function CalendarGrid({ days, slots, editable = false, onToggle }) {
                     </td>
                   )
                 }
+
                 return (
                   <td key={day.key} style={styles.slotCell}>
                     <div
@@ -355,14 +318,6 @@ const styles = {
     background: '#fff',
     cursor: 'pointer',
   },
-  primaryBtn: {
-    padding: '6px 12px',
-    borderRadius: 8,
-    border: '1px solid #2563eb',
-    background: '#2563eb',
-    color: '#fff',
-    cursor: 'pointer',
-  },
   ghostBtn: {
     padding: '6px 10px',
     borderRadius: 8,
@@ -370,12 +325,6 @@ const styles = {
     background: '#fff',
     color: '#111827',
     cursor: 'pointer',
-  },
-  input: {
-    padding: '6px 10px',
-    borderRadius: 8,
-    border: '1px solid #d1d5db',
-    fontSize: '0.95rem',
   },
   th: {
     textAlign: 'left',
@@ -397,32 +346,7 @@ const styles = {
     borderRadius: 8,
     cursor: 'pointer',
   },
-  slotView: {
-    width: '100%',
-    minHeight: 36,
-    borderRadius: 8,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontSize: '0.85rem',
-  },
-  collabBar: {
-    display: 'flex',
-    gap: 8,
-    alignItems: 'center',
-    margin: '16px 0 12px',
-  },
-  collabCard: {
-    border: '1px solid #e5e7eb',
-    borderRadius: 12,
-    padding: 12,
-    background: '#fbfbfb',
-    marginBottom: 16,
-  },
-  collabCardHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
+  slotView: { width: '100%', minHeight: 40, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.9rem', border: '1px solid #e5e7eb' },
+  collabCard: { border: '1px solid #e5e7eb', borderRadius: 12, padding: 12, marginBottom: 12 },
+  collabCardHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
 }

@@ -1,21 +1,36 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { onValue, push, ref, update } from 'firebase/database'
 import { rtdb } from '../firebase'
-import { ref, push, onValue, set, update } from 'firebase/database'
-
-const MESSAGES_PATH = 'messages'
-const PARTICIPANTS_PATH = 'participants'
 
 function encodeEmail(email) {
-  return email.replace(/\./g, ',')
+  return (email || '').replace(/\./g, ',')
 }
 
 function shortNameFromEmail(email) {
-  const local = email.split('@')[0] || email
+  const local = (email || '').split('@')[0] || email || 'Project'
   return local.replace(/[._\-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 function userKey(projectKey) {
   return `chat_user_${projectKey}`
+}
+
+function getStoredIdentity() {
+  try {
+    const stored = localStorage.getItem('user-identity')
+    if (!stored) {
+      return null
+    }
+
+    const parsed = JSON.parse(stored)
+    if (parsed && typeof parsed.email === 'string' && typeof parsed.name === 'string') {
+      return parsed
+    }
+  } catch (error) {
+    console.error('Failed to read shared identity', error)
+  }
+
+  return null
 }
 
 function getStoredUser(projectKey) {
@@ -33,19 +48,55 @@ function saveStoredUser(projectKey, user) {
   } catch (e) {}
 }
 
+function normalizeMember(member) {
+  if (!member || !member.email) {
+    return null
+  }
+
+  return {
+    email: String(member.email).trim().toLowerCase(),
+    name: typeof member.name === 'string' && member.name.trim() ? member.name.trim() : shortNameFromEmail(member.email)
+  }
+}
+
+function dedupeParticipants(participants) {
+  const byEmail = new Map()
+
+  participants.forEach((participant) => {
+    if (!participant) {
+      return
+    }
+
+    byEmail.set(participant.email, participant)
+  })
+
+  return Array.from(byEmail.values())
+}
+
 export default function Messages({ projectKey = 1 }) {
   const [messages, setMessages] = useState([])
   const [value, setValue] = useState('')
-  const [shareEmail, setShareEmail] = useState('')
-  const [participants, setParticipants] = useState([])
-  const [notification, setNotification] = useState('')
-  const [currentUser, setCurrentUser] = useState(() => getStoredUser(projectKey) || { email: `guest_${Math.random().toString(36).slice(2, 8)}@local`, name: 'Guest' })
+  const [projectMembers, setProjectMembers] = useState([])
+  const [currentUser, setCurrentUser] = useState(() => getStoredUser(projectKey) || getStoredIdentity() || {
+    email: `guest_${Math.random().toString(36).slice(2, 8)}@local`,
+    name: 'Guest'
+  })
   const [editingName, setEditingName] = useState(false)
   const [nameInput, setNameInput] = useState('')
 
   const listRef = useRef(null)
-  const emailRef = useRef(null)
   const nameInputRef = useRef(null)
+
+  const participants = useMemo(() => {
+    const current = currentUser && currentUser.email
+      ? {
+          email: currentUser.email.toLowerCase(),
+          name: currentUser.name || shortNameFromEmail(currentUser.email)
+        }
+      : null
+
+    return dedupeParticipants([current, ...projectMembers].filter(Boolean))
+  }, [currentUser, projectMembers])
 
   useEffect(() => {
     const el = listRef.current
@@ -53,33 +104,50 @@ export default function Messages({ projectKey = 1 }) {
   }, [messages])
 
   useEffect(() => {
-    if (currentUser) saveStoredUser(projectKey, currentUser)
+    if (currentUser) {
+      saveStoredUser(projectKey, currentUser)
+    }
   }, [currentUser, projectKey])
 
   useEffect(() => {
-    return onValue(ref(rtdb, MESSAGES_PATH), (snap) => {
+    const membersRef = ref(rtdb, `projects/project-${projectKey}/members`)
+
+    return onValue(membersRef, (snap) => {
+      const data = snap.val() || {}
+      const members = Object.values(data)
+        .map(normalizeMember)
+        .filter(Boolean)
+
+      setProjectMembers(members)
+    })
+  }, [projectKey])
+
+  useEffect(() => {
+    return onValue(ref(rtdb, `projects/project-${projectKey}/messages`), (snap) => {
       const data = snap.val() || {}
       const msgs = Object.entries(data)
         .map(([id, val]) => ({ id, ...val }))
         .sort((a, b) => a.ts - b.ts)
       setMessages(msgs)
     })
-  }, [])
-
-  useEffect(() => {
-    return onValue(ref(rtdb, PARTICIPANTS_PATH), (snap) => {
-      const data = snap.val() || {}
-      setParticipants(Object.values(data))
-    })
-  }, [])
+  }, [projectKey])
 
   async function send() {
     const text = value.trim()
-    if (!text) return
-    const sender = (currentUser && currentUser.email) || 'you@example.com'
-    const name = (currentUser && currentUser.name) || 'You'
+    if (!text) {
+      return
+    }
+
+    const sender = currentUser?.email || 'project-member@local'
+    const name = currentUser?.name || shortNameFromEmail(sender)
     setValue('')
-    await push(ref(rtdb, MESSAGES_PATH), { sender, name, text, ts: Date.now() })
+
+    await push(ref(rtdb, `projects/project-${projectKey}/messages`), {
+      sender,
+      name,
+      text,
+      ts: Date.now()
+    })
   }
 
   function onKeyDown(e) {
@@ -87,31 +155,6 @@ export default function Messages({ projectKey = 1 }) {
       e.preventDefault()
       send()
     }
-  }
-
-  function isValidEmail(email) {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-  }
-
-  async function addParticipant() {
-    const email = shareEmail.trim().toLowerCase()
-    if (!isValidEmail(email)) {
-      if (emailRef.current) emailRef.current.focus()
-      return
-    }
-    if (participants.find((p) => p.email === email)) {
-      setShareEmail('')
-      return
-    }
-    const name = shortNameFromEmail(email)
-    setShareEmail('')
-    await set(ref(rtdb, `${PARTICIPANTS_PATH}/${encodeEmail(email)}`), { email, name })
-    await push(ref(rtdb, MESSAGES_PATH), {
-      sender: 'system', name: 'System',
-      text: `${name} (${email}) joined the group.`, ts: Date.now(),
-    })
-    setNotification(`Email sent to ${email} with chat access link.`)
-    setTimeout(() => setNotification(''), 3000)
   }
 
   function openNameEdit() {
@@ -122,19 +165,22 @@ export default function Messages({ projectKey = 1 }) {
 
   async function saveName() {
     const name = nameInput.trim()
-    if (!name) return
-    setCurrentUser({ ...currentUser, name })
+    if (!name || !currentUser?.email) {
+      return
+    }
+
+    const updatedUser = { ...currentUser, name }
+    setCurrentUser(updatedUser)
     setEditingName(false)
 
-    const patches = {}
-    messages
-      .filter((m) => m.sender === currentUser.email)
-      .forEach((m) => { patches[`${MESSAGES_PATH}/${m.id}/name`] = name })
-
-    await Promise.all([
-      set(ref(rtdb, `${PARTICIPANTS_PATH}/${encodeEmail(currentUser.email)}`), { email: currentUser.email, name }),
-      Object.keys(patches).length ? update(ref(rtdb, '/'), patches) : Promise.resolve(),
-    ])
+    try {
+      localStorage.setItem('user-identity', JSON.stringify(updatedUser))
+      await update(ref(rtdb, `projects/project-${projectKey}/members/${encodeEmail(updatedUser.email)}`), {
+        name: updatedUser.name
+      })
+    } catch (error) {
+      console.error('Failed to update shared name:', error)
+    }
   }
 
   return (
@@ -143,9 +189,6 @@ export default function Messages({ projectKey = 1 }) {
         .messages-wrapper { display:flex; flex-direction:column; height:360px; }
         .messages-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px }
         .participants { font-size:12px; color:var(--text); opacity:0.85 }
-        .share-box { display:flex; gap:8px; align-items:center }
-        .share-box input { padding:6px 8px; border-radius:6px; border:1px solid var(--border); background:var(--code-bg); color:var(--text-h) }
-        .share-box button { padding:6px 10px; border-radius:6px; background:var(--accent); color:white; border:none }
         .messages-list { flex:1; overflow:auto; padding:8px; display:flex; flex-direction:column; gap:8px }
         .message { max-width:78%; padding:8px 10px; border-radius:10px; background:var(--bg); border:1px solid var(--border); color:var(--text); }
         .message .meta { font-size:12px; color:var(--text); opacity:0.7; margin-bottom:6px }
@@ -154,8 +197,6 @@ export default function Messages({ projectKey = 1 }) {
         .composer { display:flex; gap:8px; margin-top:8px; flex-direction:column }
         .composer textarea { flex:1; resize:none; min-height:38px; max-height:120px; padding:8px; border-radius:6px; border:1px solid var(--border); background:var(--code-bg); color:var(--text-h) }
         .composer button { padding:8px 12px; border-radius:6px; background:var(--accent); color:white; border:none; align-self:flex-end }
-        .notification { padding:8px 12px; border-radius:6px; background:var(--accent-bg); border:1px solid var(--accent-border); color:var(--accent); font-size:13px; animation:slideIn 0.3s ease-out }
-        @keyframes slideIn { from { opacity:0; transform:translateY(-4px) } to { opacity:1; transform:translateY(0) } }
         .name-edit { display:flex; gap:6px; align-items:center }
         .name-edit input { padding:4px 8px; border-radius:6px; border:1px solid var(--border); background:var(--code-bg); color:var(--text-h); font-size:13px; width:140px }
         .name-edit button { padding:4px 10px; border-radius:6px; background:var(--accent); color:white; border:none; font-size:13px }
@@ -187,18 +228,6 @@ export default function Messages({ projectKey = 1 }) {
               {currentUser.name} ✎
             </button>
           )}
-
-          <div className="share-box">
-            <input
-              ref={emailRef}
-              aria-label="Share with email"
-              placeholder="Add email to share"
-              value={shareEmail}
-              onChange={(e) => setShareEmail(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addParticipant() } }}
-            />
-            <button type="button" onClick={addParticipant}>Add</button>
-          </div>
         </div>
       </div>
 
@@ -211,7 +240,9 @@ export default function Messages({ projectKey = 1 }) {
               </div>
             )
           }
+
           const isYou = currentUser && m.sender === currentUser.email
+
           return (
             <div key={m.id} className={isYou ? 'message you' : 'message'}>
               <div className="meta">{m.name || shortNameFromEmail(m.sender)} · {new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
@@ -222,7 +253,6 @@ export default function Messages({ projectKey = 1 }) {
       </div>
 
       <div className="composer">
-        {notification && <div className="notification">{notification}</div>}
         <textarea
           placeholder="Message the group... (Enter to send, Shift+Enter for newline)"
           value={value}

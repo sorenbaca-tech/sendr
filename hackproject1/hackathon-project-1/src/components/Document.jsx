@@ -14,8 +14,25 @@ const fontFamilies = [
   { value: 'Comic Sans MS, cursive', label: 'Cursive' }
 ]
 
-// Per-tab client id so we can ignore RTDB echoes of our own writes
 const CLIENT_ID = `client-${Math.random().toString(36).slice(2, 10)}`
+
+function getStoredIdentity() {
+  try {
+    const stored = localStorage.getItem('user-identity')
+    if (!stored) {
+      return null
+    }
+
+    const parsed = JSON.parse(stored)
+    if (parsed && typeof parsed.email === 'string') {
+      return parsed
+    }
+  } catch (error) {
+    console.error('Failed to read shared identity', error)
+  }
+
+  return null
+}
 
 export default function Document({ onContentChange, projectKey }) {
   const editorRef = useRef(null)
@@ -23,28 +40,32 @@ export default function Document({ onContentChange, projectKey }) {
   const hasLoadedRef = useRef(false)
   const [activeFormats, setActiveFormats] = useState({ bold: false, italic: false, underline: false })
   const [status, setStatus] = useState('Loading…')
-  const [currentEmail, setCurrentEmail] = useState('')
-  const [emailInput, setEmailInput] = useState('')
+  const [currentEmail, setCurrentEmail] = useState(() => getStoredIdentity()?.email || '')
+  const [currentName, setCurrentName] = useState(() => getStoredIdentity()?.name || '')
   const [presence, setPresence] = useState([])
   const [lastUpdatedBy, setLastUpdatedBy] = useState('')
   const projectId = `project-${projectKey || 'default'}`
   const placeholderText =
     'Start typing your project plan here. Use the toolbar to format text, add bullet lists, select a font, and edit with other people in another browser tab.'
 
-  // Restore previously-signed-in email
   useEffect(() => {
-    const saved = window.localStorage.getItem('documentEmail') || ''
-    if (saved) setCurrentEmail(saved)
+    const identity = getStoredIdentity()
+    if (identity?.email) {
+      setCurrentEmail(identity.email)
+    }
+    if (identity?.name) {
+      setCurrentName(identity.name)
+    }
   }, [])
 
-  // Single RTDB subscription: handles both initial load and live updates
   useEffect(() => {
     hasLoadedRef.current = false
     const unsubscribe = subscribeToDocument(projectId, (data) => {
       const editor = editorRef.current
-      if (!editor) return
+      if (!editor) {
+        return
+      }
 
-      // After we've loaded once, ignore echoes of our own writes
       if (hasLoadedRef.current && data.clientId === CLIENT_ID) {
         setLastUpdatedBy(data.lastUpdatedBy || '')
         return
@@ -56,36 +77,37 @@ export default function Document({ onContentChange, projectKey }) {
         editor.innerHTML = remoteContent
         restoreSelection(editor, selection)
       }
+
       setLastUpdatedBy(data.lastUpdatedBy || '')
       hasLoadedRef.current = true
       setStatus('Saved')
     })
 
-    return () => {
-      unsubscribe()
-    }
+    return () => unsubscribe()
   }, [projectId])
 
-  // Presence: track who's currently in the document
   useEffect(() => {
     if (!currentEmail) {
       setPresence([])
       return
     }
-    updatePresence(projectId, currentEmail)
+
+    updatePresence(projectId, currentEmail, currentName)
     const unsubscribe = subscribeToPresence(projectId, setPresence)
     const interval = window.setInterval(() => {
-      updatePresence(projectId, currentEmail)
+      updatePresence(projectId, currentEmail, currentName)
     }, 15000)
     const handleUnload = () => removePresence(projectId, currentEmail)
+
     window.addEventListener('beforeunload', handleUnload)
+
     return () => {
       unsubscribe()
       clearInterval(interval)
       window.removeEventListener('beforeunload', handleUnload)
       handleUnload()
     }
-  }, [projectId, currentEmail])
+  }, [projectId, currentEmail, currentName])
 
   const updateActiveFormats = () => {
     setActiveFormats({
@@ -97,20 +119,32 @@ export default function Document({ onContentChange, projectKey }) {
 
   const queueSave = () => {
     const editor = editorRef.current
-    if (!editor) return
+    if (!editor) {
+      return
+    }
+
     const html = editor.innerHTML
-    if (typeof onContentChange === 'function') onContentChange(html)
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
+    if (typeof onContentChange === 'function') {
+      onContentChange(html)
+    }
+
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current)
+    }
+
     setStatus('Saving…')
     saveTimeoutRef.current = setTimeout(async () => {
-      const ok = await saveDocument(projectId, html, currentEmail, CLIENT_ID)
+      const ok = await saveDocument(projectId, html, currentEmail, currentName, CLIENT_ID)
       setStatus(ok ? 'Saved' : 'Save failed')
     }, 500)
   }
 
   const applyCommand = (command, value = null) => {
     const editor = editorRef.current
-    if (!editor) return
+    if (!editor) {
+      return
+    }
+
     editor.focus()
     document.execCommand('styleWithCSS', false, true)
     document.execCommand(command, false, value)
@@ -132,7 +166,10 @@ export default function Document({ onContentChange, projectKey }) {
 
   const handleFontSize = (event) => {
     const sizeValue = event.target.value
-    if (!sizeValue) return
+    if (!sizeValue) {
+      return
+    }
+
     applyCommand('fontSize', sizeValue === 'normal' ? '3' : sizeValue)
   }
 
@@ -142,27 +179,16 @@ export default function Document({ onContentChange, projectKey }) {
 
   const handleCopy = async () => {
     const editor = editorRef.current
-    if (!editor) return
+    if (!editor) {
+      return
+    }
+
     try {
       await navigator.clipboard.writeText(editor.innerText)
       alert('Document text copied to clipboard')
     } catch (error) {
       console.error('Copy failed', error)
     }
-  }
-
-  const signIn = () => {
-    const email = emailInput.trim().toLowerCase()
-    if (!email || !email.includes('@')) return
-    window.localStorage.setItem('documentEmail', email)
-    setCurrentEmail(email)
-    setEmailInput('')
-  }
-
-  const signOut = async () => {
-    if (currentEmail) await removePresence(projectId, currentEmail)
-    setCurrentEmail('')
-    window.localStorage.removeItem('documentEmail')
   }
 
   return (
@@ -181,29 +207,11 @@ export default function Document({ onContentChange, projectKey }) {
       </div>
 
       <div className="document-login-row">
-        {!currentEmail ? (
-          <div className="document-login">
-            <input
-              type="email"
-              value={emailInput}
-              onChange={(event) => setEmailInput(event.target.value)}
-              placeholder="Enter your email"
-              aria-label="Email address"
-            />
-            <button type="button" onClick={signIn}>
-              Join with Email
-            </button>
-          </div>
-        ) : (
-          <div className="document-login document-login-active">
-            <span>
-              Signed in as <strong>{currentEmail}</strong>
-            </span>
-            <button type="button" onClick={signOut}>
-              Sign Out
-            </button>
-          </div>
-        )}
+        <div className="document-login document-login-active">
+          <span>
+            Collaborating as <strong>{currentName || currentEmail || 'your project identity'}</strong>
+          </span>
+        </div>
       </div>
 
       <div className="document-toolbar">
@@ -235,7 +243,7 @@ export default function Document({ onContentChange, projectKey }) {
           Bullet List
         </button>
         <button type="button" onClick={() => applyCommand('insertOrderedList')} aria-label="Numbered list">
-          Numbered List
+          Numbered list
         </button>
         <select defaultValue="normal" onChange={handleFontSize} aria-label="Font size">
           <option value="normal">Font Size</option>
@@ -259,7 +267,7 @@ export default function Document({ onContentChange, projectKey }) {
         {status}
         {currentEmail
           ? ` • ${presence.length} collaborator${presence.length === 1 ? '' : 's'} active`
-          : ' • Sign in with your email to collaborate.'}
+          : ' • Waiting for your project identity to load.'}
         {lastUpdatedBy ? <div>Last saved by {lastUpdatedBy}</div> : null}
       </div>
 
@@ -280,7 +288,6 @@ export default function Document({ onContentChange, projectKey }) {
   )
 }
 
-// Save the current selection as plain character offsets within `container`
 function saveSelection(container) {
   const selection = window.getSelection()
   if (!selection || selection.rangeCount === 0) return null
@@ -293,7 +300,6 @@ function saveSelection(container) {
   return { start, end: start + range.toString().length }
 }
 
-// Restore a selection saved by saveSelection() after innerHTML was replaced
 function restoreSelection(container, saved) {
   if (!saved) return
   const selection = window.getSelection()
@@ -303,18 +309,21 @@ function restoreSelection(container, saved) {
   let started = false
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT)
   let node = walker.nextNode()
+
   while (node) {
     const next = charIndex + node.length
     if (!started && saved.start >= charIndex && saved.start <= next) {
       range.setStart(node, saved.start - charIndex)
       started = true
     }
+
     if (started && saved.end >= charIndex && saved.end <= next) {
       range.setEnd(node, saved.end - charIndex)
       selection.removeAllRanges()
       selection.addRange(range)
       return
     }
+
     charIndex = next
     node = walker.nextNode()
   }

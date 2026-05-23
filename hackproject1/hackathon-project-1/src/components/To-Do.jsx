@@ -1,9 +1,68 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { onValue, ref } from 'firebase/database'
+import { rtdb } from '../firebase'
 import { loadTodoState, saveTodoState, subscribeToTodoState } from '../firebaseModules'
 
 const STORAGE_KEY = 'todo_board_data'
 
-function initializeStorage() {
+function getStoredIdentity() {
+  try {
+    const stored = localStorage.getItem('user-identity')
+    if (!stored) {
+      return null
+    }
+
+    const parsed = JSON.parse(stored)
+    if (parsed && typeof parsed.email === 'string' && typeof parsed.name === 'string') {
+      return parsed
+    }
+  } catch (error) {
+    console.error('Failed to read stored identity', error)
+  }
+
+  return null
+}
+
+function normalizeEmail(email) {
+  return (email || '').trim().toLowerCase()
+}
+
+function shortNameFromEmail(email) {
+  const local = (email || '').split('@')[0] || email || 'Project'
+  return local.replace(/[._\-]/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+function buildMemberRecord(member) {
+  if (!member) {
+    return null
+  }
+
+  const email = normalizeEmail(member.email)
+  if (!email) {
+    return null
+  }
+
+  return {
+    email,
+    name: typeof member.name === 'string' && member.name.trim() ? member.name.trim() : shortNameFromEmail(email)
+  }
+}
+
+function dedupeParticipants(participants) {
+  const byEmail = new Map()
+
+  participants.forEach((participant) => {
+    if (!participant) {
+      return
+    }
+
+    byEmail.set(participant.email, participant)
+  })
+
+  return Array.from(byEmail.values())
+}
+
+function initializeStorage(identity) {
   const stored = localStorage.getItem(STORAGE_KEY)
   if (stored) {
     try {
@@ -16,16 +75,15 @@ function initializeStorage() {
     }
   }
 
+  const currentEmail = normalizeEmail(identity?.email) || 'project-member@local'
+  const currentName = identity?.name?.trim() || shortNameFromEmail(currentEmail)
+
   return {
-    participants: [
-      { email: 'you@example.com', name: 'You' },
-      { email: 'alice@example.com', name: 'Alice' },
-      { email: 'bob@example.com', name: 'Bob' }
-    ],
+    participants: [{ email: currentEmail, name: currentName }],
     tasks: [
-      { id: 1, text: 'Share the sketchpad with the team', done: false, updatedAt: Date.now() - 1000 * 60 * 5, updatedBy: 'you@example.com' },
-      { id: 2, text: 'Review the final ideas before the next sync', done: true, updatedAt: Date.now() - 1000 * 60 * 2, updatedBy: 'alice@example.com' },
-      { id: 3, text: 'Add notes to the document after the check-in', done: false, updatedAt: Date.now() - 1000 * 60, updatedBy: 'bob@example.com' }
+      { id: 1, text: 'Share the sketchpad with the team', done: false, updatedAt: Date.now() - 1000 * 60 * 5, updatedBy: currentEmail },
+      { id: 2, text: 'Review the final ideas before the next sync', done: true, updatedAt: Date.now() - 1000 * 60 * 2, updatedBy: currentEmail },
+      { id: 3, text: 'Add notes to the document after the check-in', done: false, updatedAt: Date.now() - 1000 * 60, updatedBy: currentEmail }
     ]
   }
 }
@@ -49,31 +107,52 @@ function readStoredBoard() {
   }
 }
 
-function shortNameFromEmail(email) {
-  const local = email.split('@')[0] || email
-  return local.replace(/[._\-]/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
-}
-
 function getParticipantName(participants, email) {
   const participant = participants.find((entry) => entry.email === email)
   return participant?.name || shortNameFromEmail(email)
 }
 
-function isValidEmail(value) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
-}
-
 export default function ToDo({ projectKey = 1 }) {
-  const fallbackBoard = useMemo(() => initializeStorage(), [])
-  const [participants, setParticipants] = useState(fallbackBoard.participants)
-  const [tasks, setTasks] = useState(fallbackBoard.tasks)
+  const [identity, setIdentity] = useState(() => getStoredIdentity())
+  const [projectMembers, setProjectMembers] = useState([])
+  const [tasks, setTasks] = useState(() => initializeStorage(getStoredIdentity()).tasks)
   const [taskText, setTaskText] = useState('')
-  const [shareEmail, setShareEmail] = useState('')
-  const [notification, setNotification] = useState('')
-  const [statusMessage, setStatusMessage] = useState('Everyone can edit the shared list in real time.')
+  const [statusMessage, setStatusMessage] = useState('Everyone in this project is synced automatically.')
   const [isHydrated, setIsHydrated] = useState(false)
-  const emailRef = useRef(null)
   const lastSavedRef = useRef('')
+
+  const participants = useMemo(() => {
+    const currentUser = identity
+      ? {
+          email: normalizeEmail(identity.email),
+          name: identity.name?.trim() || shortNameFromEmail(identity.email)
+        }
+      : null
+
+    return dedupeParticipants([currentUser, ...projectMembers].filter(Boolean))
+  }, [identity, projectMembers])
+
+  useEffect(() => {
+    const syncIdentity = () => setIdentity(getStoredIdentity())
+
+    syncIdentity()
+    window.addEventListener('storage', syncIdentity)
+
+    return () => window.removeEventListener('storage', syncIdentity)
+  }, [])
+
+  useEffect(() => {
+    const membersRef = ref(rtdb, `projects/project-${projectKey}/members`)
+
+    return onValue(membersRef, (snapshot) => {
+      const data = snapshot.val() || {}
+      const members = Object.values(data)
+        .map(buildMemberRecord)
+        .filter(Boolean)
+
+      setProjectMembers(members)
+    })
+  }, [projectKey])
 
   useEffect(() => {
     let active = true
@@ -81,16 +160,16 @@ export default function ToDo({ projectKey = 1 }) {
     const hydrate = async () => {
       const remoteBoard = await loadTodoState(projectKey)
       const storedBoard = readStoredBoard()
+      const fallbackBoard = initializeStorage(identity)
       const nextBoard = remoteBoard || storedBoard || fallbackBoard
 
       if (!active) {
         return
       }
 
-      setParticipants(nextBoard.participants)
       setTasks(nextBoard.tasks)
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(nextBoard))
-      lastSavedRef.current = remoteBoard ? JSON.stringify(nextBoard) : ''
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ participants, tasks: nextBoard.tasks }))
+      lastSavedRef.current = remoteBoard ? JSON.stringify({ participants, tasks: nextBoard.tasks }) : ''
       setIsHydrated(true)
     }
 
@@ -105,12 +184,11 @@ export default function ToDo({ projectKey = 1 }) {
         return
       }
 
-      const remotePayload = JSON.stringify(remoteBoard)
+      const remotePayload = JSON.stringify({ participants, tasks: remoteBoard.tasks })
       if (remotePayload === lastSavedRef.current) {
         return
       }
 
-      setParticipants(remoteBoard.participants)
       setTasks(remoteBoard.tasks)
       localStorage.setItem(STORAGE_KEY, remotePayload)
       lastSavedRef.current = remotePayload
@@ -121,7 +199,7 @@ export default function ToDo({ projectKey = 1 }) {
       active = false
       unsubscribe()
     }
-  }, [fallbackBoard, projectKey])
+  }, [identity, participants, projectKey])
 
   useEffect(() => {
     if (!isHydrated) {
@@ -141,27 +219,20 @@ export default function ToDo({ projectKey = 1 }) {
     return undefined
   }, [isHydrated, participants, tasks, projectKey])
 
-  useEffect(() => {
-    if (!notification) {
-      return undefined
-    }
-
-    const timeout = window.setTimeout(() => setNotification(''), 2500)
-    return () => window.clearTimeout(timeout)
-  }, [notification])
-
   function addTask() {
     const text = taskText.trim()
     if (!text) {
       return
     }
 
+    const currentEmail = normalizeEmail(identity?.email) || participants[0]?.email || 'project-member@local'
+
     const nextTask = {
       id: Date.now(),
       text,
       done: false,
       updatedAt: Date.now(),
-      updatedBy: 'you@example.com'
+      updatedBy: currentEmail
     }
 
     setTasks((current) => [nextTask, ...current])
@@ -170,6 +241,8 @@ export default function ToDo({ projectKey = 1 }) {
   }
 
   function updateTask(id, changes) {
+    const currentEmail = normalizeEmail(identity?.email) || participants[0]?.email || 'project-member@local'
+
     setTasks((current) =>
       current.map((task) =>
         task.id === id
@@ -177,47 +250,11 @@ export default function ToDo({ projectKey = 1 }) {
               ...task,
               ...changes,
               updatedAt: Date.now(),
-              updatedBy: 'you@example.com'
+              updatedBy: currentEmail
             }
           : task
       )
     )
-  }
-
-  function addParticipant() {
-    const email = shareEmail.trim().toLowerCase()
-    if (!isValidEmail(email)) {
-      if (emailRef.current) {
-        emailRef.current.focus()
-      }
-      return
-    }
-
-    if (participants.find((entry) => entry.email === email)) {
-      setShareEmail('')
-      return
-    }
-
-    const participant = { email, name: shortNameFromEmail(email) }
-    setParticipants((current) => [...current, participant])
-    setShareEmail('')
-    setNotification(`Shared with ${participant.name}.`)
-    setStatusMessage('Collaborator added to the shared todo board.')
-  }
-
-  function removeParticipant(email) {
-    setParticipants((current) => current.filter((participant) => participant.email !== email))
-    setTasks((current) =>
-      current.map((task) =>
-        task.updatedBy === email
-          ? {
-              ...task,
-              updatedBy: 'you@example.com'
-            }
-          : task
-      )
-    )
-    setStatusMessage('Collaborator removed from the board.')
   }
 
   function removeTask(id) {
@@ -243,13 +280,10 @@ export default function ToDo({ projectKey = 1 }) {
         .todo-participants { display:flex; flex-wrap:wrap; gap:8px; }
         .todo-participant-pill { display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border-radius:999px; background:var(--code-bg); border:1px solid var(--border); font-size:0.82rem; }
         .todo-avatar { width:26px; height:26px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; background:var(--accent-bg); color:var(--accent); font-weight:700; }
-        .todo-remove-btn { border:1px solid var(--border); border-radius:999px; background:var(--bg); color:var(--text-h); padding:6px 10px; font-size:0.85rem; cursor:pointer; }
-        .todo-share { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-        .todo-share input { padding:8px 10px; border-radius:8px; border:1px solid var(--border); background:var(--code-bg); color:var(--text-h); min-width:220px; }
-        .todo-share button, .todo-add button { border:none; border-radius:999px; padding:8px 14px; font-weight:700; cursor:pointer; background:var(--accent); color:white; }
         .todo-status { font-size:0.9rem; color:var(--muted, #6b7280); }
         .todo-add { display:flex; gap:8px; align-items:center; }
         .todo-add input { flex:1; padding:10px 12px; border-radius:8px; border:1px solid var(--border); background:var(--code-bg); color:var(--text-h); }
+        .todo-add button { border:none; border-radius:999px; padding:8px 14px; font-weight:700; cursor:pointer; background:var(--accent); color:white; }
         .todo-list { display:flex; flex-direction:column; gap:10px; }
         .todo-item { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:12px; align-items:center; padding:12px; border-radius:12px; border:1px solid var(--border); background:var(--bg); }
         .todo-item input[type='checkbox'] { width:18px; height:18px; accent-color:var(--accent); }
@@ -260,30 +294,12 @@ export default function ToDo({ projectKey = 1 }) {
         .todo-item-meta .todo-meta-pill { display:inline-flex; align-items:center; gap:6px; padding:4px 8px; border-radius:999px; background:var(--code-bg); }
         .todo-item.done input { text-decoration:line-through; color:var(--muted, #6b7280); }
         .todo-empty { padding:18px; border-radius:12px; border:1px dashed var(--border); color:var(--muted, #6b7280); background:var(--bg); }
-        .todo-notification { padding:8px 12px; border-radius:8px; background:var(--accent-bg); border:1px solid var(--accent-border); color:var(--accent); font-size:0.9rem; }
       `}</style>
 
       <div className="todo-header">
         <div className="todo-title">
           <h3>To-Do</h3>
-          <p className="todo-muted">Editable task list for your team. Everyone can update the shared board.</p>
-        </div>
-
-        <div className="todo-share">
-          <input
-            ref={emailRef}
-            aria-label="Add collaborator email"
-            placeholder="Add collaborator email"
-            value={shareEmail}
-            onChange={(event) => setShareEmail(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault()
-                addParticipant()
-              }
-            }}
-          />
-          <button type="button" onClick={addParticipant}>Share</button>
+          <p className="todo-muted">Editable task list for your team. Everyone in this project is synced automatically.</p>
         </div>
       </div>
 
@@ -292,23 +308,11 @@ export default function ToDo({ projectKey = 1 }) {
           <div key={participant.email} className="todo-participant-pill">
             <span className="todo-avatar">{participant.name.charAt(0).toUpperCase()}</span>
             <span>{participant.name}</span>
-            {participant.email !== 'you@example.com' && (
-              <button
-                type="button"
-                className="todo-remove-btn"
-                onClick={() => removeParticipant(participant.email)}
-                aria-label={`Remove ${participant.name}`}
-              >
-                Remove
-              </button>
-            )}
           </div>
         ))}
       </div>
 
       <div className="todo-status">{statusMessage}</div>
-
-      {notification && <div className="todo-notification">{notification}</div>}
 
       <div className="todo-add">
         <input
