@@ -55,6 +55,13 @@
   cursor: pointer;
 }
 
+.document-toolbar button.active-format,
+.document-toolbar select.active-format {
+  background: rgba(255, 255, 255, 0.16);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .document-toolbar button:hover,
 .document-toolbar select:hover {
   background: rgba(255, 255, 255, 0.08);
