@@ -3,7 +3,7 @@ import './App.css'
 import './components/components.css'
 import Calendar from './components/Calendar.jsx'
 import Messages from './components/Messages.jsx'
-import Todo from './components/Todo.jsx'
+import ToDo from './components/To-Do.jsx'
 import Sketchpad from './components/Sketchpad.jsx'
 import Document from './components/Document.jsx'
 
@@ -11,13 +11,13 @@ function App() {
   const [activeTab, setActiveTab] = useState('document')
   const [docKey, setDocKey] = useState(1)
 
-  const tabs = [
-    { key: 'calendar', label: 'Calendar', component: <Calendar /> },
-    { key: 'document', label: 'Document', component: <Document key={docKey} /> },
-    { key: 'messages', label: 'Messages', component: <Messages /> },
-    { key: 'sketchpad', label: 'Sketchpad', component: <Sketchpad /> },
-    { key: 'todo', label: 'Todo', component: <Todo /> }
-  ]
+const tabs = [
+  { key: 'calendar', label: 'Calendar', component: <Calendar /> },
+  { key: 'document', label: 'Document', component: <Document /> },
+  { key: 'messages', label: 'Messages', component: <Messages /> },
+  { key: 'sketchpad', label: 'Sketchpad', component: <Sketchpad /> },
+  { key: 'todo', label: 'To-Do', component: <ToDo /> }
+]
 
   const activeTabData = tabs.find((tab) => tab.key === activeTab) || tabs[0]
 
