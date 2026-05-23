@@ -33,6 +33,10 @@ function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
 }
 
+function emailToKey(email) {
+  return email.replace(/[.#$/[\]]/g, '_')
+}
+
 // Seed the localStorage / sessionStorage keys that existing components read,
 // so Document, Messages, and Calendar pick up the identity on mount.
 function persistIdentityToComponents(identity, projectSlug) {
@@ -70,6 +74,8 @@ function App() {
   const [joining, setJoining] = useState(false)
   const [joinError, setJoinError] = useState('')
   const [joinNotice, setJoinNotice] = useState('')
+  const [editingName, setEditingName] = useState(false)
+  const [nameDraft, setNameDraft] = useState('')
 
   useEffect(() => {
     try {
@@ -129,7 +135,7 @@ function App() {
 
       // Register membership so the project knows who's joined.
       await set(
-        ref(rtdb, `projects/project-${slug}/members/${email.replace(/[.#$/[\]]/g, '_')}`),
+        ref(rtdb, `projects/project-${slug}/members/${emailToKey(email)}`),
         { name: displayName, email, joinedAt: serverTimestamp() }
       )
 
@@ -143,6 +149,43 @@ function App() {
       setJoinError('Could not reach the database. Please try again.')
     } finally {
       setJoining(false)
+    }
+  }
+
+  const startEditingName = () => {
+    setNameDraft(identity?.name || '')
+    setEditingName(true)
+  }
+
+  const cancelEditingName = () => {
+    setEditingName(false)
+    setNameDraft('')
+  }
+
+  const saveDisplayName = async () => {
+    const next = nameDraft.trim()
+    if (!next || !identity || !project) {
+      cancelEditingName()
+      return
+    }
+    if (next === identity.name) {
+      cancelEditingName()
+      return
+    }
+
+    const nextIdentity = { ...identity, name: next }
+    setIdentity(nextIdentity)
+    persistIdentityToComponents(nextIdentity, project.slug)
+    setEditingName(false)
+    setNameDraft('')
+
+    try {
+      await set(
+        ref(rtdb, `projects/project-${project.slug}/members/${emailToKey(identity.email)}/name`),
+        next
+      )
+    } catch (err) {
+      console.error('Failed to update display name:', err)
     }
   }
 
@@ -226,11 +269,14 @@ function App() {
 
   const renderActive = () => {
     const keySuffix = `project-${project.slug}`
+    // Messages caches its current user in state on mount; include the display
+    // name in its key so it remounts and picks up renames immediately.
+    const messagesKey = `messages-${keySuffix}-${identity?.name || ''}`
     switch (activeTab) {
       case 'calendar':
         return <Calendar key={`calendar-${keySuffix}`} projectKey={project.slug} />
       case 'messages':
-        return <Messages key={`messages-${keySuffix}`} projectKey={project.slug} />
+        return <Messages key={messagesKey} projectKey={project.slug} />
       case 'todo':
         return <ToDo key={`todo-${keySuffix}`} projectKey={project.slug} />
       case 'sketchpad':
@@ -260,11 +306,30 @@ function App() {
         <div style={projectChrome.bar}>
           <span style={projectChrome.label}>
             Project: <strong>{project.name}</strong>
+            {identity && ' · '}
             {identity && (
-              <>
-                {' · '}
-                <span title={identity.email}>{identity.name}</span>
-              </>
+              editingName ? (
+                <input
+                  autoFocus
+                  value={nameDraft}
+                  onChange={(e) => setNameDraft(e.target.value)}
+                  onBlur={saveDisplayName}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') saveDisplayName()
+                    else if (e.key === 'Escape') cancelEditingName()
+                  }}
+                  style={projectChrome.nameInput}
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={startEditingName}
+                  title={`${identity.email} — click to rename`}
+                  style={projectChrome.nameBtn}
+                >
+                  {identity.name}
+                </button>
+              )
             )}
           </span>
           <button
@@ -317,6 +382,22 @@ const projectChrome = {
     alignItems: 'center',
   },
   label: { fontSize: '0.9rem', color: '#374151' },
+  nameBtn: {
+    background: 'transparent',
+    border: 'none',
+    padding: 0,
+    color: '#2563eb',
+    cursor: 'pointer',
+    font: 'inherit',
+    textDecoration: 'underline dotted',
+  },
+  nameInput: {
+    padding: '2px 6px',
+    borderRadius: 6,
+    border: '1px solid #2563eb',
+    font: 'inherit',
+    width: 140,
+  },
 }
 
 export default App
