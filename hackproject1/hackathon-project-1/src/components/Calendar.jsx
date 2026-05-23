@@ -1,5 +1,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
+import { initializeApp, getApps } from 'firebase/app'
+import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore'
 
 const hourLabels = Array.from({ length: 12 }, (_, index) => {
   const hour = 8 + index
@@ -7,12 +9,43 @@ const hourLabels = Array.from({ length: 12 }, (_, index) => {
   return { hour, label }
 })
 
-const STORAGE_KEY_PREFIX = 'calendar-selected-slots:'
 const CURRENT_EMAIL_KEY = 'calendar-current-email'
 const COLLABS_KEY = 'calendar-collaborators'
 
-function storageKeyForEmail(email) {
-  return `${STORAGE_KEY_PREFIX}${email}`
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+}
+
+let firestoreDb
+function getFirestoreDb() {
+  if (typeof window === 'undefined') return null
+  if (firestoreDb) return firestoreDb
+  if (!firebaseConfig.apiKey || !firebaseConfig.projectId || !firebaseConfig.appId) return null
+
+  const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig)
+  firestoreDb = getFirestore(app)
+  return firestoreDb
+}
+
+function normalizeEmail(email) {
+  return email.trim().toLowerCase()
+}
+
+function getUserDocRef(email) {
+  const db = getFirestoreDb()
+  if (!db) return null
+  return doc(db, 'calendar', 'users', normalizeEmail(email))
+}
+
+function getCollaboratorsDocRef() {
+  const db = getFirestoreDb()
+  if (!db) return null
+  return doc(db, 'calendar', 'metadata', 'collaborators')
 }
 
 export default function Calendar() {
@@ -37,82 +70,7 @@ export default function Calendar() {
   })
 
   const [collabAvailability, setCollabAvailability] = useState({})
-
   const [today, setToday] = useState(() => new Date())
-
-  useEffect(() => {
-    const now = new Date()
-    const nextMidnight = new Date(now)
-    nextMidnight.setHours(24, 0, 0, 0)
-    const timeout = window.setTimeout(() => setToday(new Date()), nextMidnight.getTime() - now.getTime())
-
-    return () => window.clearTimeout(timeout)
-  }, [])
-
-  // Load current user's slots when email changes
-  useEffect(() => {
-    if (!currentEmail) {
-      setSelectedSlots({})
-      return
-    }
-
-    try {
-      const raw = window.localStorage.getItem(storageKeyForEmail(currentEmail))
-      setSelectedSlots(raw ? JSON.parse(raw) : {})
-    } catch {
-      setSelectedSlots({})
-    }
-    try {
-      window.localStorage.setItem(CURRENT_EMAIL_KEY, currentEmail)
-    } catch {}
-  }, [currentEmail])
-
-  // Persist collaborators list
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(COLLABS_KEY, JSON.stringify(collaborators))
-    } catch {}
-  }, [collaborators])
-
-  // Load collaborators' availability whenever collaborators change
-  useEffect(() => {
-    const map = {}
-    collaborators.forEach(email => {
-      try {
-        const raw = window.localStorage.getItem(storageKeyForEmail(email))
-        map[email] = raw ? JSON.parse(raw) : {}
-      } catch {
-        map[email] = {}
-      }
-    })
-    setCollabAvailability(map)
-  }, [collaborators])
-
-  // Listen for other tabs updating availability
-  useEffect(() => {
-    function handleStorage(e) {
-      if (!e.key) return
-      if (e.key.startsWith(STORAGE_KEY_PREFIX)) {
-        const email = e.key.slice(STORAGE_KEY_PREFIX.length)
-        try {
-          const parsed = e.newValue ? JSON.parse(e.newValue) : {}
-          if (email === currentEmail) setSelectedSlots(parsed)
-          if (collaborators.includes(email)) {
-            setCollabAvailability(prev => ({ ...prev, [email]: parsed }))
-          }
-        } catch {}
-      }
-      if (e.key === COLLABS_KEY) {
-        try {
-          const parsed = e.newValue ? JSON.parse(e.newValue) : []
-          setCollaborators(parsed)
-        } catch {}
-      }
-    }
-
-    window.addEventListener('storage', handleStorage)
-    return () => window.removeEventListener('storage', handleStorage)
-  }, [currentEmail, collaborators])
 
   const days = useMemo(() => {
     const start = new Date(today)
@@ -129,14 +87,81 @@ export default function Calendar() {
     })
   }, [today])
 
+  useEffect(() => {
+    const now = new Date()
+    const nextMidnight = new Date(now)
+    nextMidnight.setHours(24, 0, 0, 0)
+    const timeout = window.setTimeout(() => setToday(new Date()), nextMidnight.getTime() - now.getTime())
+
+    return () => window.clearTimeout(timeout)
+  }, [])
+
+  useEffect(() => {
+    const collabRef = getCollaboratorsDocRef()
+    if (!collabRef) return
+
+    const unsubscribe = onSnapshot(collabRef, snapshot => {
+      const data = snapshot.data()
+      if (!data || !Array.isArray(data.emails)) return
+      setCollaborators(data.emails.map(normalizeEmail))
+    })
+
+    return unsubscribe
+  }, [])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(CURRENT_EMAIL_KEY, currentEmail)
+      } catch {}
+    }
+
+    if (!currentEmail) {
+      setSelectedSlots({})
+      return
+    }
+
+    const userRef = getUserDocRef(currentEmail)
+    if (!userRef) return
+
+    const unsubscribe = onSnapshot(userRef, snapshot => {
+      const data = snapshot.data()
+      setSelectedSlots(data?.slots || {})
+    })
+
+    return unsubscribe
+  }, [currentEmail])
+
+  useEffect(() => {
+    const unsubs = collaborators.map(email => {
+      const userRef = getUserDocRef(email)
+      if (!userRef) return () => {}
+      return onSnapshot(userRef, snapshot => {
+        const data = snapshot.data()
+        setCollabAvailability(prev => ({ ...prev, [email]: data?.slots || {} }))
+      })
+    })
+
+    return () => unsubs.forEach(unsub => unsub())
+  }, [collaborators])
+
+  const updateCollaboratorsDoc = async (emails) => {
+    const docRef = getCollaboratorsDocRef()
+    if (!docRef) return
+    try {
+      await setDoc(docRef, { emails }, { merge: true })
+    } catch {}
+  }
+
   const toggleSlot = (dayKey, hour) => {
     if (!currentEmail) return
     const slotKey = `${dayKey}-${hour}`
     setSelectedSlots(prev => {
       const next = { ...prev, [slotKey]: !prev[slotKey] }
-      try {
-        window.localStorage.setItem(storageKeyForEmail(currentEmail), JSON.stringify(next))
-      } catch {}
+      const userRef = getUserDocRef(currentEmail)
+      if (userRef) {
+        setDoc(userRef, { slots: next }, { merge: true }).catch(() => {})
+      }
       return next
     })
   }
@@ -144,32 +169,47 @@ export default function Calendar() {
   const clearAll = () => {
     if (!currentEmail) return
     setSelectedSlots({})
-    try {
-      window.localStorage.removeItem(storageKeyForEmail(currentEmail))
-    } catch {}
+    const userRef = getUserDocRef(currentEmail)
+    if (userRef) {
+      setDoc(userRef, { slots: {} }, { merge: true }).catch(() => {})
+    }
   }
 
   const signIn = (email) => {
-    setCurrentEmail(email.trim().toLowerCase())
+    setCurrentEmail(normalizeEmail(email))
   }
 
   const signOut = () => {
     setCurrentEmail('')
   }
 
-  const addCollaborator = (email) => {
-    const normalized = email.trim().toLowerCase()
+  const addCollaborator = async (email) => {
+    const normalized = normalizeEmail(email)
     if (!normalized) return
     if (collaborators.includes(normalized) || normalized === currentEmail) return
-    setCollaborators(prev => [...prev, normalized])
+    const next = [...collaborators, normalized]
+    setCollaborators(next)
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(COLLABS_KEY, JSON.stringify(next))
+      }
+    } catch {}
+    await updateCollaboratorsDoc(next)
   }
 
-  const removeCollaborator = (email) => {
-    setCollaborators(prev => prev.filter(e => e !== email))
+  const removeCollaborator = async (email) => {
+    const next = collaborators.filter(e => e !== email)
+    setCollaborators(next)
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(COLLABS_KEY, JSON.stringify(next))
+      }
+    } catch {}
+    await updateCollaboratorsDoc(next)
     setCollabAvailability(prev => {
-      const next = { ...prev }
-      delete next[email]
-      return next
+      const nextAvailability = { ...prev }
+      delete nextAvailability[email]
+      return nextAvailability
     })
   }
 
