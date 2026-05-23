@@ -40,9 +40,12 @@ export default function Messages() {
   const [currentUser, setCurrentUser] = useState(() => getStoredUser())
   const [signupEmail, setSignupEmail] = useState('')
   const [signupName, setSignupName] = useState('')
+  const [editingName, setEditingName] = useState(false)
+  const [nameInput, setNameInput] = useState('')
 
   const listRef = useRef(null)
   const emailRef = useRef(null)
+  const nameInputRef = useRef(null)
 
   useEffect(() => {
     const el = listRef.current
@@ -127,6 +130,21 @@ export default function Messages() {
     setTimeout(() => setNotification(''), 2500)
   }
 
+  function openNameEdit() {
+    setNameInput(currentUser.name)
+    setEditingName(true)
+    setTimeout(() => nameInputRef.current && nameInputRef.current.focus(), 0)
+  }
+
+  async function saveName() {
+    const name = nameInput.trim()
+    if (!name) return
+    const updated = { ...currentUser, name }
+    setCurrentUser(updated)
+    await set(ref(rtdb, `${PARTICIPANTS_PATH}/${encodeEmail(currentUser.email)}`), { email: currentUser.email, name })
+    setEditingName(false)
+  }
+
   if (!currentUser) {
     return (
       <section className="component-card messages-wrapper">
@@ -184,6 +202,11 @@ export default function Messages() {
         .composer button { padding:8px 12px; border-radius:6px; background:var(--accent); color:white; border:none; align-self:flex-end }
         .notification { padding:8px 12px; border-radius:6px; background:var(--accent-bg); border:1px solid var(--accent-border); color:var(--accent); font-size:13px; animation:slideIn 0.3s ease-out }
         @keyframes slideIn { from { opacity:0; transform:translateY(-4px) } to { opacity:1; transform:translateY(0) } }
+        .name-edit { display:flex; gap:6px; align-items:center }
+        .name-edit input { padding:4px 8px; border-radius:6px; border:1px solid var(--border); background:var(--code-bg); color:var(--text-h); font-size:13px; width:140px }
+        .name-edit button { padding:4px 10px; border-radius:6px; background:var(--accent); color:white; border:none; font-size:13px }
+        .name-edit .cancel { background:transparent; color:var(--text); border:1px solid var(--border) }
+        .rename-btn { padding:4px 10px; border-radius:6px; background:transparent; border:1px solid var(--border); color:var(--text); font-size:12px; cursor:pointer }
       `}</style>
 
       <div className="messages-header">
@@ -192,16 +215,36 @@ export default function Messages() {
           <div className="participants">Participants: {participants.length}</div>
         </div>
 
-        <div className="share-box">
-          <input
-            ref={emailRef}
-            aria-label="Share with email"
-            placeholder="Add email to share"
-            value={shareEmail}
-            onChange={(e) => setShareEmail(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addParticipant() } }}
-          />
-          <button type="button" onClick={addParticipant}>Add</button>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          {editingName ? (
+            <div className="name-edit">
+              <input
+                ref={nameInputRef}
+                value={nameInput}
+                onChange={(e) => setNameInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') saveName(); if (e.key === 'Escape') setEditingName(false) }}
+                aria-label="New display name"
+              />
+              <button type="button" onClick={saveName}>Save</button>
+              <button type="button" className="cancel" onClick={() => setEditingName(false)}>Cancel</button>
+            </div>
+          ) : (
+            <button type="button" className="rename-btn" onClick={openNameEdit}>
+              {currentUser.name} ✎
+            </button>
+          )}
+
+          <div className="share-box">
+            <input
+              ref={emailRef}
+              aria-label="Share with email"
+              placeholder="Add email to share"
+              value={shareEmail}
+              onChange={(e) => setShareEmail(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addParticipant() } }}
+            />
+            <button type="button" onClick={addParticipant}>Add</button>
+          </div>
         </div>
       </div>
 
