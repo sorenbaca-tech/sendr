@@ -126,7 +126,7 @@ export default function Messages({ projectKey = 1 }) {
     }
     await push(ref(rtdb, MESSAGES_PATH), {
       sender: 'system', name: 'System',
-      text: `${name} (${email}) joined as you.`, ts: Date.now(),
+      text: `${name} (${email}) joined.`, ts: Date.now(),
     })
     setNotification(`Signed in as ${name} <${email}>`)
     setTimeout(() => setNotification(''), 2500)
