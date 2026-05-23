@@ -1,5 +1,6 @@
 import { doc, getDoc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore'
-import { db } from './firebase'
+import { get, onValue, ref, set } from 'firebase/database'
+import { db, rtdb } from './firebase'
 
 function getProjectId(projectKey) {
   return `project-${projectKey ?? 1}`
@@ -9,40 +10,44 @@ function getModuleDoc(projectKey, moduleName) {
   return doc(db, 'projects', getProjectId(projectKey), 'modules', moduleName)
 }
 
+function getSketchpadRef(projectKey) {
+  return ref(rtdb, `projects/${getProjectId(projectKey)}/modules/sketchpad`)
+}
+
 export async function loadSketchpadState(projectKey) {
   try {
-    const snapshot = await getDoc(getModuleDoc(projectKey, 'sketchpad'))
+    const snapshot = await get(getSketchpadRef(projectKey))
 
     if (!snapshot.exists()) {
       return ''
     }
 
-    return snapshot.data().dataUrl || ''
+    const value = snapshot.val()
+    return typeof value === 'string' ? value : value?.dataUrl || ''
   } catch (error) {
-    console.error('Failed to load sketchpad state from Firebase:', error)
+    console.error('Failed to load sketchpad state from Realtime Database:', error)
     return ''
   }
 }
 
 export function subscribeToSketchpadState(projectKey, callback) {
   try {
-    const unsubscribe = onSnapshot(
-      getModuleDoc(projectKey, 'sketchpad'),
+    return onValue(
+      getSketchpadRef(projectKey),
       (snapshot) => {
         if (!snapshot.exists()) {
           callback('')
           return
         }
 
-        callback(snapshot.data().dataUrl || '')
+        const value = snapshot.val()
+        callback(typeof value === 'string' ? value : value?.dataUrl || '')
       },
       (error) => {
         console.error('Failed to subscribe to sketchpad state:', error)
         callback('')
       }
     )
-
-    return unsubscribe
   } catch (error) {
     console.error('Failed to set up sketchpad subscription:', error)
     return () => {}
@@ -51,19 +56,15 @@ export function subscribeToSketchpadState(projectKey, callback) {
 
 export async function saveSketchpadState(projectKey, dataUrl) {
   try {
-    await setDoc(
-      getModuleDoc(projectKey, 'sketchpad'),
-      {
-        dataUrl: dataUrl || '',
-        lastUpdatedAt: serverTimestamp(),
-        updatedAtLocal: new Date().toISOString()
-      },
-      { merge: true }
-    )
+    await set(getSketchpadRef(projectKey), {
+      dataUrl: dataUrl || '',
+      lastUpdatedAt: Date.now(),
+      updatedAtLocal: new Date().toISOString()
+    })
 
     return true
   } catch (error) {
-    console.error('Failed to save sketchpad state to Firebase:', error)
+    console.error('Failed to save sketchpad state to Realtime Database:', error)
     return false
   }
 }
