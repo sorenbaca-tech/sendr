@@ -6,17 +6,90 @@
 }
 
 .component-card {
-  border: 1px solid var(--border);
-  padding: 16px;
-  border-radius: 8px;
-  background: var(--code-bg);
+  position: relative;
+  border: 3px solid transparent;
+  padding: 20px;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.78)) padding-box,
+    linear-gradient(135deg,
+      var(--c-calendar),
+      var(--c-document),
+      var(--c-messages),
+      var(--c-sketchpad),
+      var(--c-todo)) border-box;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow:
+    0 14px 40px rgba(34, 17, 68, 0.12),
+    0 2px 6px rgba(34, 17, 68, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
   text-align: left;
+  overflow: hidden;
+}
+
+@media (prefers-color-scheme: dark) {
+  .component-card {
+    background:
+      linear-gradient(180deg, rgba(28, 30, 42, 0.92), rgba(20, 22, 32, 0.82)) padding-box,
+      linear-gradient(135deg,
+        var(--c-calendar),
+        var(--c-document),
+        var(--c-messages),
+        var(--c-sketchpad),
+        var(--c-todo)) border-box;
+    box-shadow:
+      0 14px 40px rgba(0, 0, 0, 0.5),
+      0 0 0 1px rgba(255, 255, 255, 0.04),
+      inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+}
+
+/* Vibrant top edge that hints which tab you're on */
+.component-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 8px;
+  background: linear-gradient(90deg,
+    var(--c-calendar),
+    var(--c-document),
+    var(--c-messages),
+    var(--c-sketchpad),
+    var(--c-todo));
+  background-size: 200% 100%;
+  animation: card-rainbow 8s ease-in-out infinite;
+  box-shadow: 0 0 18px rgba(255, 59, 139, 0.55);
+}
+
+@keyframes card-rainbow {
+  0%, 100% { background-position: 0% 50%; }
+  50%      { background-position: 100% 50%; }
 }
 
 .document-card {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
+}
+
+/* Soft ambient color wash for the document panel */
+.document-card::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  top: -120px;
+  right: -120px;
+  width: 360px;
+  height: 360px;
+  background: radial-gradient(closest-side, rgba(255, 138, 61, 0.35), transparent 70%);
+  filter: blur(20px);
+  z-index: 0;
+}
+
+.document-card > * {
+  position: relative;
+  z-index: 1;
 }
 
 .document-header {
@@ -35,14 +108,44 @@
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  padding: 8px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: linear-gradient(90deg,
+    rgba(255, 94, 126, 0.18),
+    rgba(255, 138, 61, 0.18),
+    rgba(0, 194, 168, 0.18),
+    rgba(77, 139, 255, 0.18),
+    rgba(177, 76, 255, 0.18));
+  border: 2.5px solid transparent;
+  background-clip: padding-box;
+  background-origin: padding-box;
+  box-shadow:
+    0 0 0 2.5px transparent,
+    0 6px 18px rgba(255, 138, 61, 0.18);
+  background:
+    linear-gradient(90deg,
+      rgba(255, 94, 126, 0.18),
+      rgba(255, 138, 61, 0.18),
+      rgba(0, 194, 168, 0.18),
+      rgba(77, 139, 255, 0.18),
+      rgba(177, 76, 255, 0.18)) padding-box,
+    linear-gradient(90deg,
+      var(--c-calendar),
+      var(--c-document),
+      var(--c-messages),
+      var(--c-sketchpad),
+      var(--c-todo)) border-box;
 }
 
 .document-status {
   font-size: 0.9rem;
-  color: rgba(255, 255, 255, 0.7);
-  padding-bottom: 8px;
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 138, 61, 0.12);
+  border: 1px solid rgba(255, 138, 61, 0.3);
+  display: inline-block;
+  width: fit-content;
 }
 
 .document-login-row {
@@ -61,21 +164,36 @@
 }
 
 .document-login input {
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: rgba(255, 255, 255, 0.04);
-  color: inherit;
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(77, 139, 255, 0.4);
+  background: rgba(77, 139, 255, 0.06);
+  color: var(--text-h);
   min-width: 220px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.document-login input:focus {
+  outline: none;
+  border-color: var(--c-sketchpad);
+  box-shadow: 0 0 0 4px rgba(77, 139, 255, 0.18);
 }
 
 .document-login button {
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: transparent;
-  color: inherit;
-  padding: 8px 14px;
-  border-radius: 8px;
+  border: none;
+  background: linear-gradient(135deg, var(--c-messages), var(--c-sketchpad));
+  color: #fff;
+  font-weight: 600;
+  padding: 10px 18px;
+  border-radius: 999px;
   cursor: pointer;
+  box-shadow: 0 6px 16px rgba(0, 194, 168, 0.35);
+  transition: transform 0.15s, box-shadow 0.2s;
+}
+
+.document-login button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 22px rgba(0, 194, 168, 0.45);
 }
 
 .document-login-active {
@@ -84,56 +202,94 @@
 
 .document-toolbar button,
 .document-toolbar select {
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: transparent;
-  color: inherit;
-  padding: 8px 10px;
-  border-radius: 6px;
+  border: 1px solid rgba(255, 138, 61, 0.3);
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--text-h);
+  font-weight: 500;
+  padding: 8px 12px;
+  border-radius: 8px;
   cursor: pointer;
-}
-
-.document-toolbar button.active-format,
-.document-toolbar select.active-format {
-  background: rgba(255, 255, 255, 0.16);
-  color: var(--accent);
-  border-color: var(--accent);
+  transition: transform 0.12s, background 0.18s, border-color 0.18s, box-shadow 0.2s;
 }
 
 .document-toolbar button:hover,
 .document-toolbar select:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 138, 61, 0.15);
+  border-color: var(--c-document);
+  transform: translateY(-1px);
+}
+
+.document-toolbar button.active-format {
+  background: linear-gradient(135deg, var(--c-document), var(--c-action));
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 6px 16px rgba(255, 59, 139, 0.35);
+}
+
+@media (prefers-color-scheme: dark) {
+  .document-toolbar button,
+  .document-toolbar select {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-h);
+  }
 }
 
 .document-editor {
-  min-height: 260px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 10px;
-  padding: 16px;
-  background: rgba(255, 255, 255, 0.04);
+  min-height: 320px;
+  border: 4px solid transparent;
+  border-radius: 16px;
+  padding: 20px 22px;
+  background:
+    linear-gradient(#fff, #fff) padding-box,
+    linear-gradient(135deg, var(--c-document), var(--c-action), var(--c-todo)) border-box;
   color: var(--text-h);
   outline: none;
   overflow-y: auto;
   white-space: pre-wrap;
+  box-shadow:
+    0 0 0 1px rgba(255, 59, 139, 0.25),
+    0 12px 34px rgba(255, 138, 61, 0.32),
+    0 0 22px rgba(255, 59, 139, 0.22);
+  transition: box-shadow 0.25s, transform 0.15s;
+}
+
+.document-editor:focus {
+  box-shadow:
+    0 0 0 2px rgba(255, 59, 139, 0.45),
+    0 16px 42px rgba(255, 59, 139, 0.38),
+    0 0 30px rgba(255, 138, 61, 0.4);
+}
+
+@media (prefers-color-scheme: dark) {
+  .document-editor {
+    background:
+      linear-gradient(#171821, #171821) padding-box,
+      linear-gradient(135deg, var(--c-document), var(--c-action), var(--c-todo)) border-box;
+  }
 }
 
 .document-editor:empty::before {
   content: attr(data-placeholder);
-  color: rgba(107, 99, 117, 0.65);
+  color: rgba(107, 99, 117, 0.7);
   white-space: pre-wrap;
   pointer-events: none;
 }
 
 .doc-action {
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: transparent;
-  color: inherit;
-  padding: 8px 14px;
-  border-radius: 8px;
+  border: none;
+  background: linear-gradient(135deg, var(--c-todo), var(--c-action));
+  color: #fff;
+  font-weight: 600;
+  padding: 10px 18px;
+  border-radius: 999px;
   cursor: pointer;
+  box-shadow: 0 6px 16px rgba(177, 76, 255, 0.35);
+  transition: transform 0.15s, box-shadow 0.2s;
 }
 
 .doc-action:hover {
-  background: rgba(255, 255, 255, 0.08);
+  transform: translateY(-2px);
+  box-shadow: 0 10px 22px rgba(255, 59, 139, 0.45);
 }
 
 #workspace-components h2 {
