@@ -1,15 +1,23 @@
 :root {
-  --text: #6b6375;
+  --text: #4b4458;
   --text-h: #08060d;
   --bg: #fff;
   --border: #e5e4e7;
   --code-bg: #f4f3ec;
   --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
+  --accent-bg: rgba(170, 59, 255, 0.12);
   --accent-border: rgba(170, 59, 255, 0.5);
   --social-bg: rgba(244, 243, 236, 0.5);
   --shadow:
     rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+
+  /* Per-tab vibrant accent palette */
+  --c-calendar: #ff5e7e;
+  --c-document: #ff8a3d;
+  --c-messages: #00c2a8;
+  --c-sketchpad: #4d8bff;
+  --c-todo: #b14cff;
+  --c-action: #ff3b8b;
 
   --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
   --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
@@ -32,13 +40,13 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
+    --text: #c9cbd1;
+    --text-h: #ffffff;
+    --bg: #0e0f17;
     --border: #2e303a;
     --code-bg: #1f2028;
     --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
+    --accent-bg: rgba(192, 132, 252, 0.18);
     --accent-border: rgba(192, 132, 252, 0.5);
     --social-bg: rgba(47, 48, 58, 0.5);
     --shadow:
@@ -52,6 +60,30 @@
 
 body {
   margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(255, 94, 126, 0.22), transparent 60%),
+    radial-gradient(900px 600px at 110% 10%, rgba(77, 139, 255, 0.22), transparent 60%),
+    radial-gradient(900px 700px at 50% 120%, rgba(177, 76, 255, 0.22), transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
+}
+
+@keyframes hue-drift {
+  0%, 100% { filter: hue-rotate(0deg); }
+  50%      { filter: hue-rotate(25deg); }
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+  background:
+    radial-gradient(600px 300px at 80% 90%, rgba(0, 194, 168, 0.18), transparent 60%),
+    radial-gradient(500px 400px at 20% 80%, rgba(255, 138, 61, 0.18), transparent 60%);
+  animation: hue-drift 18s ease-in-out infinite;
 }
 
 #root {
