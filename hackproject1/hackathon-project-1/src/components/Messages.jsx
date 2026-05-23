@@ -1,18 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { db } from '../firebase'
-import {
-  collection,
-  addDoc,
-  onSnapshot,
-  orderBy,
-  query,
-  setDoc,
-  doc,
-  getDocs,
-} from 'firebase/firestore'
+import { rtdb } from '../firebase'
+import { ref, push, onValue, set } from 'firebase/database'
 
-const MESSAGES_COL = 'messages'
-const PARTICIPANTS_COL = 'participants'
+const MESSAGES_PATH = 'messages'
+const PARTICIPANTS_PATH = 'participants'
+
+function encodeEmail(email) {
+  return email.replace(/\./g, ',')
+}
 
 function shortNameFromEmail(email) {
   const local = email.split('@')[0] || email
@@ -33,9 +28,7 @@ function getStoredUser() {
 function saveStoredUser(user) {
   try {
     sessionStorage.setItem(USER_KEY, JSON.stringify(user))
-  } catch (e) {
-    // ignore
-  }
+  } catch (e) {}
 }
 
 export default function Messages() {
@@ -60,19 +53,20 @@ export default function Messages() {
     if (currentUser) saveStoredUser(currentUser)
   }, [currentUser])
 
-  // real-time messages listener
   useEffect(() => {
-    const q = query(collection(db, MESSAGES_COL), orderBy('ts', 'asc'))
-    const unsub = onSnapshot(q, (snap) => {
-      setMessages(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
+    return onValue(ref(rtdb, MESSAGES_PATH), (snap) => {
+      const data = snap.val() || {}
+      const msgs = Object.entries(data)
+        .map(([id, val]) => ({ id, ...val }))
+        .sort((a, b) => a.ts - b.ts)
+      setMessages(msgs)
     })
-    return unsub
   }, [])
 
-  // load participants once
   useEffect(() => {
-    getDocs(collection(db, PARTICIPANTS_COL)).then((snap) => {
-      setParticipants(snap.docs.map((d) => d.data()))
+    return onValue(ref(rtdb, PARTICIPANTS_PATH), (snap) => {
+      const data = snap.val() || {}
+      setParticipants(Object.values(data))
     })
   }, [])
 
@@ -82,7 +76,7 @@ export default function Messages() {
     const sender = (currentUser && currentUser.email) || 'you@example.com'
     const name = (currentUser && currentUser.name) || 'You'
     setValue('')
-    await addDoc(collection(db, MESSAGES_COL), { sender, name, text, ts: Date.now() })
+    await push(ref(rtdb, MESSAGES_PATH), { sender, name, text, ts: Date.now() })
   }
 
   function onKeyDown(e) {
@@ -108,9 +102,8 @@ export default function Messages() {
     }
     const name = shortNameFromEmail(email)
     setShareEmail('')
-    await setDoc(doc(db, PARTICIPANTS_COL, email), { email, name })
-    setParticipants((s) => [...s, { email, name }])
-    await addDoc(collection(db, MESSAGES_COL), {
+    await set(ref(rtdb, `${PARTICIPANTS_PATH}/${encodeEmail(email)}`), { email, name })
+    await push(ref(rtdb, MESSAGES_PATH), {
       sender: 'system', name: 'System',
       text: `${name} (${email}) joined the group.`, ts: Date.now(),
     })
@@ -124,10 +117,9 @@ export default function Messages() {
     const u = { email, name }
     setCurrentUser(u)
     if (!participants.find((p) => p.email === email)) {
-      await setDoc(doc(db, PARTICIPANTS_COL, email), { email, name })
-      setParticipants((s) => [...s, { email, name }])
+      await set(ref(rtdb, `${PARTICIPANTS_PATH}/${encodeEmail(email)}`), { email, name })
     }
-    await addDoc(collection(db, MESSAGES_COL), {
+    await push(ref(rtdb, MESSAGES_PATH), {
       sender: 'system', name: 'System',
       text: `${name} (${email}) joined as you.`, ts: Date.now(),
     })
