@@ -39,9 +39,7 @@ export default function Messages({ projectKey = 1 }) {
   const [shareEmail, setShareEmail] = useState('')
   const [participants, setParticipants] = useState([])
   const [notification, setNotification] = useState('')
-  const [currentUser, setCurrentUser] = useState(() => getStoredUser(projectKey))
-  const [signupEmail, setSignupEmail] = useState('')
-  const [signupName, setSignupName] = useState('')
+  const [currentUser, setCurrentUser] = useState(() => getStoredUser(projectKey) || { email: `guest_${Math.random().toString(36).slice(2, 8)}@local`, name: 'Guest' })
   const [editingName, setEditingName] = useState(false)
   const [nameInput, setNameInput] = useState('')
 
@@ -116,22 +114,6 @@ export default function Messages({ projectKey = 1 }) {
     setTimeout(() => setNotification(''), 3000)
   }
 
-  async function completeSignup(userEmail, displayName) {
-    const email = userEmail.trim().toLowerCase()
-    const name = displayName.trim() || shortNameFromEmail(email)
-    const u = { email, name }
-    setCurrentUser(u)
-    if (!participants.find((p) => p.email === email)) {
-      await set(ref(rtdb, `${PARTICIPANTS_PATH}/${encodeEmail(email)}`), { email, name })
-    }
-    await push(ref(rtdb, MESSAGES_PATH), {
-      sender: 'system', name: 'System',
-      text: `${name} (${email}) joined.`, ts: Date.now(),
-    })
-    setNotification(`Signed in as ${name} <${email}>`)
-    setTimeout(() => setNotification(''), 2500)
-  }
-
   function openNameEdit() {
     setNameInput(currentUser.name)
     setEditingName(true)
@@ -153,44 +135,6 @@ export default function Messages({ projectKey = 1 }) {
       set(ref(rtdb, `${PARTICIPANTS_PATH}/${encodeEmail(currentUser.email)}`), { email: currentUser.email, name }),
       Object.keys(patches).length ? update(ref(rtdb, '/'), patches) : Promise.resolve(),
     ])
-  }
-
-  if (!currentUser) {
-    return (
-      <section className="component-card messages-wrapper">
-        <style>{`
-          .messages-wrapper { display:flex; flex-direction:column; height:360px; }
-          .signup { display:flex; flex-direction:column; gap:8px; padding:16px }
-          .signup input { padding:8px 10px; border:1px solid var(--border); border-radius:6px; background:var(--code-bg); color:var(--text-h) }
-          .signup button { padding:8px 12px; border-radius:6px; background:var(--accent); color:white; border:none; align-self:flex-end }
-        `}</style>
-
-        <div className="signup">
-          <h3>Sign in to Chat</h3>
-          <input
-            aria-label="Your email"
-            placeholder="you@example.com"
-            value={signupEmail}
-            onChange={(e) => setSignupEmail(e.target.value)}
-          />
-          <input
-            aria-label="Display name"
-            placeholder="How should others see you?"
-            value={signupName}
-            onChange={(e) => setSignupName(e.target.value)}
-          />
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <button
-              type="button"
-              onClick={() => completeSignup(signupEmail, signupName)}
-              disabled={!isValidEmail(signupEmail)}
-            >
-              Join Chat
-            </button>
-          </div>
-        </div>
-      </section>
-    )
   }
 
   return (
