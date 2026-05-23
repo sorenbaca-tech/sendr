@@ -3,7 +3,7 @@ import './App.css'
 import './components/components.css'
 import Calendar from './components/Calendar.jsx'
 import Messages from './components/Messages.jsx'
-import Todo from './components/Todo.jsx'
+import ToDo from './components/To-Do.jsx'
 import Sketchpad from './components/Sketchpad.jsx'
 import Document from './components/Document.jsx'
 
@@ -12,7 +12,7 @@ const tabs = [
   { key: 'document', label: 'Document', component: <Document /> },
   { key: 'messages', label: 'Messages', component: <Messages /> },
   { key: 'sketchpad', label: 'Sketchpad', component: <Sketchpad /> },
-  { key: 'todo', label: 'Todo', component: <Todo /> }
+  { key: 'todo', label: 'To-Do', component: <ToDo /> }
 ]
 
 function App() {
