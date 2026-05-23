@@ -81,6 +81,48 @@ export default function Sketchpad() {
     return () => resizeObserver.disconnect()
   }, [])
 
+  useEffect(() => {
+    const canvas = canvasRef.current
+
+    if (!canvas) {
+      return undefined
+    }
+
+    const handlePointerDown = (event) => {
+      startDrawing(event)
+    }
+
+    const handlePointerMove = (event) => {
+      continueDrawing(event)
+    }
+
+    const handlePointerUp = () => {
+      stopDrawing()
+    }
+
+    const handlePointerLeave = () => {
+      stopDrawing()
+    }
+
+    const handlePointerCancel = () => {
+      stopDrawing()
+    }
+
+    canvas.addEventListener('pointerdown', handlePointerDown)
+    canvas.addEventListener('pointermove', handlePointerMove)
+    canvas.addEventListener('pointerup', handlePointerUp)
+    canvas.addEventListener('pointerleave', handlePointerLeave)
+    canvas.addEventListener('pointercancel', handlePointerCancel)
+
+    return () => {
+      canvas.removeEventListener('pointerdown', handlePointerDown)
+      canvas.removeEventListener('pointermove', handlePointerMove)
+      canvas.removeEventListener('pointerup', handlePointerUp)
+      canvas.removeEventListener('pointerleave', handlePointerLeave)
+      canvas.removeEventListener('pointercancel', handlePointerCancel)
+    }
+  }, [brushSize, color, tool, isDrawing])
+
   const getPoint = (event) => {
     const canvas = canvasRef.current
 
@@ -309,11 +351,6 @@ export default function Sketchpad() {
       >
         <canvas
           ref={canvasRef}
-          onPointerDown={startDrawing}
-          onPointerMove={continueDrawing}
-          onPointerUp={stopDrawing}
-          onPointerLeave={stopDrawing}
-          onPointerCancel={stopDrawing}
           style={{
             display: 'block',
             touchAction: 'none',
