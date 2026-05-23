@@ -1,4 +1,12 @@
 hello
+<<<<<<< HEAD
+print("f")
+dev test11
+dev iyer is here
+=======
 print("foul")
 Dev Iyer is here
 hello can you see this - Dev
+>>>>>>> 99abba6aa1f2a5e7ea6aff2b5200cceaf876edf2
+
+hello guys
