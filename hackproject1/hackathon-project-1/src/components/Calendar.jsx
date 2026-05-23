@@ -1,4 +1,3 @@
-
 import React, { useEffect, useMemo, useState } from 'react'
 import { rtdb } from '../firebase'
 import { ref, onValue, set } from 'firebase/database'
@@ -17,11 +16,24 @@ function normalizeEmail(email) {
 }
 
 function getUserSlotsRef(email) {
+  if (!rtdb || !email) return null
   return ref(rtdb, `calendar/users/${normalizeEmail(email)}/slots`)
 }
 
 function getCollaboratorsRef() {
-  return ref(rtdb, 'calendar/metadata/collaborators/emails')
+  if (!rtdb) return null
+  return ref(rtdb, 'calendar/metadata/collaborators')
+}
+
+function parseCollaborators(value) {
+  if (!value) return []
+  if (Array.isArray(value)) return value.filter(Boolean).map(normalizeEmail)
+  if (Array.isArray(value.emails)) return value.emails.filter(Boolean).map(normalizeEmail)
+  if (typeof value === 'object' && value !== null) {
+    const values = Object.values(value).filter((entry) => typeof entry === 'string' && entry.trim())
+    if (values.length) return values.map(normalizeEmail)
+  }
+  return []
 }
 
 export default function Calendar() {
@@ -44,8 +56,8 @@ export default function Calendar() {
       return []
     }
   })
-
   const [collabAvailability, setCollabAvailability] = useState({})
+  const [errorMessage, setErrorMessage] = useState('')
   const [today, setToday] = useState(() => new Date())
 
   const days = useMemo(() => {
@@ -73,14 +85,29 @@ export default function Calendar() {
   }, [])
 
   useEffect(() => {
-    const collabRef = getCollaboratorsRef()
-    const unsubscribe = onValue(collabRef, snapshot => {
-      const data = snapshot.val()
-      if (!Array.isArray(data)) {
-        setCollaborators([])
-        return
+    const collaboratorsRef = getCollaboratorsRef()
+    if (!collaboratorsRef) {
+      setErrorMessage('Realtime Database is unavailable for calendar data.')
+      return undefined
+    }
+
+    const unsubscribe = onValue(collaboratorsRef, (snapshot) => {
+      try {
+        if (!snapshot.exists()) {
+          return
+        }
+
+        const next = parseCollaborators(snapshot.val())
+        setCollaborators(next)
+
+        if (typeof window !== 'undefined') {
+          try {
+            window.localStorage.setItem(COLLABS_KEY, JSON.stringify(next))
+          } catch {}
+        }
+      } catch (err) {
+        console.error('Calendar collaborators listener failed:', err)
       }
-      setCollaborators(data.map(normalizeEmail))
     })
 
     return unsubscribe
@@ -95,51 +122,87 @@ export default function Calendar() {
 
     if (!currentEmail) {
       setSelectedSlots({})
-      return
+      return undefined
     }
 
     const userRef = getUserSlotsRef(currentEmail)
-    const unsubscribe = onValue(userRef, snapshot => {
-      const slots = snapshot.exists() ? snapshot.val() || {} : {}
-      setSelectedSlots(slots)
+    if (!userRef) {
+      setErrorMessage('Realtime Database is unavailable for calendar user state.')
+      return undefined
+    }
+
+    const unsubscribe = onValue(userRef, (snapshot) => {
+      try {
+        const loaded = snapshot.exists() ? snapshot.val() : {}
+        setSelectedSlots(typeof loaded === 'object' && loaded !== null ? loaded : {})
+      } catch (err) {
+        console.error('Calendar user slots listener failed:', err)
+        setSelectedSlots({})
+      }
     })
 
     return unsubscribe
   }, [currentEmail])
 
   useEffect(() => {
-    const unsubs = collaborators.map(email => {
-      const userRef = getUserSlotsRef(email)
-      return onValue(userRef, snapshot => {
-        const slots = snapshot.exists() ? snapshot.val() || {} : {}
-        setCollabAvailability(prev => ({ ...prev, [email]: slots }))
-      })
-    })
+    if (!collaborators.length) return undefined
 
-    return () => unsubs.forEach(unsub => unsub())
+    const listeners = collaborators
+      .map((email) => {
+        const userRef = getUserSlotsRef(email)
+        if (!userRef) return null
+
+        return onValue(userRef, (snapshot) => {
+          try {
+            const loaded = snapshot.exists() ? snapshot.val() : {}
+            setCollabAvailability((prev) => ({
+              ...prev,
+              [email]: typeof loaded === 'object' && loaded !== null ? loaded : {},
+            }))
+          } catch (err) {
+            console.error('Calendar collaborator slots listener failed:', err)
+          }
+        })
+      })
+      .filter(Boolean)
+
+    return () => listeners.forEach((unsubscribe) => unsubscribe && unsubscribe())
   }, [collaborators])
 
   const updateCollaboratorsDoc = async (emails) => {
-    const collabRef = getCollaboratorsRef()
+    const collaboratorsRef = getCollaboratorsRef()
+    if (!collaboratorsRef) return
+
     try {
-      await set(collabRef, emails)
-    } catch {}
+      await set(collaboratorsRef, { emails })
+    } catch (err) {
+      console.error('Failed to write calendar collaborators:', err)
+    }
+  }
+
+  const writeUserSlots = async (email, slots) => {
+    const userRef = getUserSlotsRef(email)
+    if (!userRef) return
+
+    try {
+      await set(userRef, slots)
+    } catch (err) {
+      console.error('Failed to write calendar slots:', err)
+    }
   }
 
   const toggleSlot = (dayKey, hour) => {
     if (!currentEmail) return
     const slotKey = `${dayKey}-${hour}`
-    setSelectedSlots(prev => {
-      const next = { ...prev, [slotKey]: !prev[slotKey] }
-      set(getUserSlotsRef(currentEmail), next).catch(() => {})
-      return next
-    })
+    const next = { ...selectedSlots, [slotKey]: !selectedSlots[slotKey] }
+    setSelectedSlots(next)
+    writeUserSlots(currentEmail, next)
   }
 
   const clearAll = () => {
     if (!currentEmail) return
     setSelectedSlots({})
-    set(getUserSlotsRef(currentEmail), {}).catch(() => {})
+    writeUserSlots(currentEmail, {})
   }
 
   const signIn = (email) => {
@@ -154,26 +217,31 @@ export default function Calendar() {
     const normalized = normalizeEmail(email)
     if (!normalized) return
     if (collaborators.includes(normalized) || normalized === currentEmail) return
+
     const next = [...collaborators, normalized]
     setCollaborators(next)
+
     try {
       if (typeof window !== 'undefined') {
         window.localStorage.setItem(COLLABS_KEY, JSON.stringify(next))
       }
     } catch {}
+
     await updateCollaboratorsDoc(next)
   }
 
   const removeCollaborator = async (email) => {
-    const next = collaborators.filter(e => e !== email)
+    const next = collaborators.filter((entry) => entry !== email)
     setCollaborators(next)
+
     try {
       if (typeof window !== 'undefined') {
         window.localStorage.setItem(COLLABS_KEY, JSON.stringify(next))
       }
     } catch {}
+
     await updateCollaboratorsDoc(next)
-    setCollabAvailability(prev => {
+    setCollabAvailability((prev) => {
       const nextAvailability = { ...prev }
       delete nextAvailability[email]
       return nextAvailability
@@ -181,9 +249,17 @@ export default function Calendar() {
   }
 
   const selectedCount = Object.values(selectedSlots).filter(Boolean).length
-
   const [signInInput, setSignInInput] = useState('')
   const [collabInput, setCollabInput] = useState('')
+
+  if (errorMessage) {
+    return (
+      <section className="component-card" style={{ padding: '16px', minWidth: '100%' }}>
+        <div style={{ color: '#b91c1c', fontWeight: 600 }}>Calendar error</div>
+        <p>{errorMessage}</p>
+      </section>
+    )
+  }
 
   return (
     <section className="component-card" style={{ padding: '16px', minWidth: '100%' }}>
@@ -204,12 +280,15 @@ export default function Calendar() {
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
               <input
                 value={signInInput}
-                onChange={e => setSignInInput(e.target.value)}
+                onChange={(e) => setSignInInput(e.target.value)}
                 placeholder="you@example.com"
                 style={{ padding: '6px 8px', borderRadius: 8, border: '1px solid #d1d5db' }}
               />
               <button
-                onClick={() => { signIn(signInInput); setSignInInput('') }}
+                onClick={() => {
+                  signIn(signInInput)
+                  setSignInInput('')
+                }}
                 style={{ padding: '6px 10px', borderRadius: 8 }}
               >
                 Sign in
@@ -244,11 +323,17 @@ export default function Calendar() {
       <div style={{ marginBottom: '12px', display: 'flex', gap: '8px', alignItems: 'center' }}>
         <input
           value={collabInput}
-          onChange={e => setCollabInput(e.target.value)}
+          onChange={(e) => setCollabInput(e.target.value)}
           placeholder="add collaborator email"
           style={{ padding: '6px 8px', borderRadius: 8, border: '1px solid #d1d5db', flex: '0 0 320px' }}
         />
-        <button onClick={() => { addCollaborator(collabInput); setCollabInput('') }} style={{ padding: '6px 10px', borderRadius: 8 }}>
+        <button
+          onClick={() => {
+            addCollaborator(collabInput)
+            setCollabInput('')
+          }}
+          style={{ padding: '6px 10px', borderRadius: 8 }}
+        >
           Add collaborator
         </button>
         <div style={{ marginLeft: 'auto', color: '#555' }}>{collaborators.length} collaborators</div>
@@ -271,7 +356,7 @@ export default function Calendar() {
               >
                 Time
               </th>
-              {days.map(day => (
+              {days.map((day) => (
                 <th
                   key={day.key}
                   style={{
@@ -299,7 +384,7 @@ export default function Calendar() {
                 >
                   {label}
                 </td>
-                {days.map(day => {
+                {days.map((day) => {
                   const slotKey = `${day.key}-${hour}`
                   const isSelected = !!selectedSlots[slotKey]
                   return (
@@ -339,7 +424,7 @@ export default function Calendar() {
       </div>
 
       <div style={{ display: 'grid', gap: '18px' }}>
-        {collaborators.map(email => {
+        {collaborators.map((email) => {
           const availability = collabAvailability[email] || {}
           const displayName = email.split('@')[0]
           return (
@@ -356,7 +441,9 @@ export default function Calendar() {
                 <div style={{ fontWeight: 600, color: '#111' }}>{displayName}</div>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <div style={{ fontSize: '0.85rem', color: '#6b7280' }}>{email}</div>
-                  <button onClick={() => removeCollaborator(email)} style={{ padding: '6px 8px', borderRadius: 8 }}>Remove</button>
+                  <button onClick={() => removeCollaborator(email)} style={{ padding: '6px 8px', borderRadius: 8 }}>
+                    Remove
+                  </button>
                 </div>
               </div>
               <div style={{ overflowX: 'auto' }}>
@@ -376,7 +463,7 @@ export default function Calendar() {
                       >
                         Time
                       </th>
-                      {days.map(day => (
+                      {days.map((day) => (
                         <th
                           key={day.key}
                           style={{
@@ -404,7 +491,7 @@ export default function Calendar() {
                         >
                           {label}
                         </td>
-                        {days.map(day => {
+                        {days.map((day) => {
                           const isFree = !!availability[`${day.key}-${hour}`]
                           return (
                             <td key={`${email}-${day.key}-${hour}`} style={{ padding: '6px 4px', borderBottom: '1px solid #eee' }}>
