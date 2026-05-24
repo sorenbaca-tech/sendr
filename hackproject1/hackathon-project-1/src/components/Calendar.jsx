@@ -17,7 +17,16 @@ const HOURS = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => {
 const normalize = (email) => (email || '').trim().toLowerCase()
 const emailKey = (email) => normalize(email).replace(/[.#$/[\]]/g, '_')
 const slotKey = (dayKey, hour) => `${dayKey}-${hour}`
-const todayKey = () => new Date().toISOString().slice(0, 10)
+
+// Local-date key. Using toISOString() would give the UTC date, which is wrong
+// for any timezone west of UTC after late afternoon (and east of UTC before
+// dawn).
+function toDateKey(date) {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
 
 function getDisplayName(name, email) {
   const trimmed = typeof name === 'string' ? name.trim() : ''
@@ -43,7 +52,7 @@ function buildWeek(from) {
     const date = new Date(start)
     date.setDate(start.getDate() + i)
     return {
-      key: date.toISOString().slice(0, 10),
+      key: toDateKey(date),
       label: date.toLocaleDateString(undefined, {
         weekday: 'short',
         month: 'short',
@@ -67,7 +76,33 @@ export default function Calendar({ projectKey = 'default', identity = null }) {
   const [weekStart, setWeekStart] = useState(() => new Date())
 
   const days = useMemo(() => buildWeek(weekStart), [weekStart])
-  const currentDayKey = todayKey()
+  const [currentDayKey, setCurrentDayKey] = useState(() => toDateKey(new Date()))
+
+  useEffect(() => {
+    let timeoutId
+    const tick = () => setCurrentDayKey(toDateKey(new Date()))
+
+    const scheduleNextMidnight = () => {
+      const now = new Date()
+      const nextMidnight = new Date(now)
+      nextMidnight.setHours(24, 0, 0, 0)
+      timeoutId = window.setTimeout(() => {
+        tick()
+        scheduleNextMidnight()
+      }, nextMidnight.getTime() - now.getTime() + 100)
+    }
+
+    const onVisibility = () => {
+      if (!document.hidden) tick()
+    }
+
+    scheduleNextMidnight()
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.clearTimeout(timeoutId)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [])
 
   useEffect(() => {
     if (!currentEmail) {
