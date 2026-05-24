@@ -29,7 +29,7 @@ const TOOL_STROKE_WIDTH = {
   eraser: 28
 }
 
-const STORAGE_KEY = 'sketchpad-canvas-data'
+const storageKey = (projectKey) => `sketchpad-canvas-data:${projectKey}`
 
 export default function Sketchpad({ projectKey = 1 }) {
   const canvasRef = useRef(null)
@@ -126,7 +126,7 @@ export default function Sketchpad({ projectKey = 1 }) {
 
     const hydrate = async () => {
       const remoteDataUrl = await loadSketchpadState(projectKey)
-      const localDataUrl = localStorage.getItem(STORAGE_KEY)
+      const localDataUrl = localStorage.getItem(storageKey(projectKey))
       const nextDataUrl = remoteDataUrl || localDataUrl || ''
 
       if (!active) {
@@ -137,9 +137,9 @@ export default function Sketchpad({ projectKey = 1 }) {
       lastSavedRef.current = nextDataUrl
 
       if (nextDataUrl) {
-        localStorage.setItem(STORAGE_KEY, nextDataUrl)
+        localStorage.setItem(storageKey(projectKey), nextDataUrl)
       } else {
-        localStorage.removeItem(STORAGE_KEY)
+        localStorage.removeItem(storageKey(projectKey))
       }
 
       drawSavedImage(nextDataUrl)
@@ -162,9 +162,9 @@ export default function Sketchpad({ projectKey = 1 }) {
       lastSavedRef.current = nextDataUrl
 
       if (nextDataUrl) {
-        localStorage.setItem(STORAGE_KEY, nextDataUrl)
+        localStorage.setItem(storageKey(projectKey), nextDataUrl)
       } else {
-        localStorage.removeItem(STORAGE_KEY)
+        localStorage.removeItem(storageKey(projectKey))
       }
 
       drawSavedImage(nextDataUrl)
@@ -192,7 +192,7 @@ export default function Sketchpad({ projectKey = 1 }) {
 
       lastSavedRef.current = nextDataUrl
       savedDataUrlRef.current = nextDataUrl
-      localStorage.setItem(STORAGE_KEY, nextDataUrl)
+      localStorage.setItem(storageKey(projectKey), nextDataUrl)
       await saveSketchpadState(projectKey, nextDataUrl)
     }
 
@@ -309,7 +309,7 @@ export default function Sketchpad({ projectKey = 1 }) {
 
       lastSavedRef.current = nextDataUrl
       savedDataUrlRef.current = nextDataUrl
-      localStorage.setItem(STORAGE_KEY, nextDataUrl)
+      localStorage.setItem(storageKey(projectKey), nextDataUrl)
       await saveSketchpadState(projectKey, nextDataUrl)
     }, 120)
   }
@@ -397,7 +397,7 @@ export default function Sketchpad({ projectKey = 1 }) {
 
     savedDataUrlRef.current = ''
     lastSavedRef.current = ''
-    localStorage.removeItem(STORAGE_KEY)
+    localStorage.removeItem(storageKey(projectKey))
     await saveSketchpadState(projectKey, '')
   }
 

@@ -3,7 +3,7 @@ import { onValue, ref } from 'firebase/database'
 import { rtdb } from '../firebase'
 import { loadTodoState, saveTodoState, subscribeToTodoState } from '../firebaseModules'
 
-const STORAGE_KEY = 'todo_board_data'
+const storageKey = (projectKey) => `todo_board_data:${projectKey}`
 
 function getStoredIdentity() {
   try {
@@ -62,8 +62,8 @@ function dedupeParticipants(participants) {
   return Array.from(byEmail.values())
 }
 
-function initializeStorage(identity) {
-  const stored = localStorage.getItem(STORAGE_KEY)
+function initializeStorage(identity, projectKey) {
+  const stored = localStorage.getItem(storageKey(projectKey))
   if (stored) {
     try {
       const parsed = JSON.parse(stored)
@@ -88,8 +88,8 @@ function initializeStorage(identity) {
   }
 }
 
-function readStoredBoard() {
-  const stored = localStorage.getItem(STORAGE_KEY)
+function readStoredBoard(projectKey) {
+  const stored = localStorage.getItem(storageKey(projectKey))
   if (!stored) {
     return null
   }
@@ -115,7 +115,7 @@ function getParticipantName(participants, email) {
 export default function ToDo({ projectKey = 1 }) {
   const [identity, setIdentity] = useState(() => getStoredIdentity())
   const [projectMembers, setProjectMembers] = useState([])
-  const [tasks, setTasks] = useState(() => initializeStorage(getStoredIdentity()).tasks)
+  const [tasks, setTasks] = useState(() => initializeStorage(getStoredIdentity(), projectKey).tasks)
   const [taskText, setTaskText] = useState('')
   const [statusMessage, setStatusMessage] = useState('Everyone in this project is synced automatically.')
   const [isHydrated, setIsHydrated] = useState(false)
@@ -159,8 +159,8 @@ export default function ToDo({ projectKey = 1 }) {
 
     const hydrate = async () => {
       const remoteBoard = await loadTodoState(projectKey)
-      const storedBoard = readStoredBoard()
-      const fallbackBoard = initializeStorage(identity)
+      const storedBoard = readStoredBoard(projectKey)
+      const fallbackBoard = initializeStorage(identity, projectKey)
       const nextBoard = remoteBoard || storedBoard || fallbackBoard
 
       if (!active) {
@@ -168,7 +168,7 @@ export default function ToDo({ projectKey = 1 }) {
       }
 
       setTasks(nextBoard.tasks)
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ participants, tasks: nextBoard.tasks }))
+      localStorage.setItem(storageKey(projectKey), JSON.stringify({ participants, tasks: nextBoard.tasks }))
       lastSavedRef.current = remoteBoard ? JSON.stringify({ participants, tasks: nextBoard.tasks }) : ''
       setIsHydrated(true)
     }
@@ -190,7 +190,7 @@ export default function ToDo({ projectKey = 1 }) {
       }
 
       setTasks(remoteBoard.tasks)
-      localStorage.setItem(STORAGE_KEY, remotePayload)
+      localStorage.setItem(storageKey(projectKey), remotePayload)
       lastSavedRef.current = remotePayload
       setStatusMessage('Shared list updated from another tab.')
     })
@@ -212,7 +212,7 @@ export default function ToDo({ projectKey = 1 }) {
     }
 
     lastSavedRef.current = payload
-    localStorage.setItem(STORAGE_KEY, payload)
+    localStorage.setItem(storageKey(projectKey), payload)
 
     saveTodoState(projectKey, { participants, tasks })
 
