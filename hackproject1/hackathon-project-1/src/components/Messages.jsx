@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { onValue, push, ref, update } from 'firebase/database'
+import { onValue, push, ref } from 'firebase/database'
 import { rtdb } from '../firebase'
 
 function encodeEmail(email) {
@@ -81,11 +81,7 @@ export default function Messages({ projectKey = 1 }) {
     email: `guest_${Math.random().toString(36).slice(2, 8)}@local`,
     name: 'Guest'
   })
-  const [editingName, setEditingName] = useState(false)
-  const [nameInput, setNameInput] = useState('')
-
   const listRef = useRef(null)
-  const nameInputRef = useRef(null)
 
   const participants = useMemo(() => {
     const current = currentUser && currentUser.email
@@ -157,32 +153,6 @@ export default function Messages({ projectKey = 1 }) {
     }
   }
 
-  function openNameEdit() {
-    setNameInput(currentUser.name)
-    setEditingName(true)
-    setTimeout(() => nameInputRef.current && nameInputRef.current.focus(), 0)
-  }
-
-  async function saveName() {
-    const name = nameInput.trim()
-    if (!name || !currentUser?.email) {
-      return
-    }
-
-    const updatedUser = { ...currentUser, name }
-    setCurrentUser(updatedUser)
-    setEditingName(false)
-
-    try {
-      localStorage.setItem('user-identity', JSON.stringify(updatedUser))
-      await update(ref(rtdb, `projects/project-${projectKey}/members/${encodeEmail(updatedUser.email)}`), {
-        name: updatedUser.name
-      })
-    } catch (error) {
-      console.error('Failed to update shared name:', error)
-    }
-  }
-
   return (
     <section className="component-card messages-wrapper">
       <style>{`
@@ -197,11 +167,6 @@ export default function Messages({ projectKey = 1 }) {
         .composer { display:flex; gap:8px; margin-top:8px; flex-direction:column }
         .composer textarea { flex:1; resize:none; min-height:38px; max-height:120px; padding:8px; border-radius:6px; border:1px solid var(--border); background:var(--code-bg); color:var(--text-h) }
         .composer button { padding:8px 12px; border-radius:6px; background:var(--accent); color:white; border:none; align-self:flex-end }
-        .name-edit { display:flex; gap:6px; align-items:center }
-        .name-edit input { padding:4px 8px; border-radius:6px; border:1px solid var(--border); background:var(--code-bg); color:var(--text-h); font-size:13px; width:140px }
-        .name-edit button { padding:4px 10px; border-radius:6px; background:var(--accent); color:white; border:none; font-size:13px }
-        .name-edit .cancel { background:transparent; color:var(--text); border:1px solid var(--border) }
-        .rename-btn { padding:4px 10px; border-radius:6px; background:transparent; border:1px solid var(--border); color:var(--text); font-size:12px; cursor:pointer }
       `}</style>
 
       <div className="messages-header">
@@ -210,25 +175,6 @@ export default function Messages({ projectKey = 1 }) {
           <div className="participants">Participants: {participants.length}</div>
         </div>
 
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          {editingName ? (
-            <div className="name-edit">
-              <input
-                ref={nameInputRef}
-                value={nameInput}
-                onChange={(e) => setNameInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') saveName(); if (e.key === 'Escape') setEditingName(false) }}
-                aria-label="New display name"
-              />
-              <button type="button" onClick={saveName}>Save</button>
-              <button type="button" className="cancel" onClick={() => setEditingName(false)}>Cancel</button>
-            </div>
-          ) : (
-            <button type="button" className="rename-btn" onClick={openNameEdit}>
-              {currentUser.name} ✎
-            </button>
-          )}
-        </div>
       </div>
 
       <div className="messages-list" ref={listRef} aria-live="polite">
