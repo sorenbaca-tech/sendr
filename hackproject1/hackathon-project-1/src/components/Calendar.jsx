@@ -5,6 +5,7 @@ import { rtdb } from '../firebase'
 const START_HOUR = 8
 const END_HOUR = 20
 const DAYS_IN_WEEK = 7
+const MAX_RECOMMENDATIONS = 5
 
 const HOURS = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => {
   const hour = START_HOUR + i
@@ -16,33 +17,23 @@ const HOURS = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => {
 const normalize = (email) => (email || '').trim().toLowerCase()
 const emailKey = (email) => normalize(email).replace(/[.#$/[\]]/g, '_')
 const slotKey = (dayKey, hour) => `${dayKey}-${hour}`
-
-function getStoredIdentity() {
-  try {
-    const stored = localStorage.getItem('user-identity')
-    if (!stored) {
-      return null
-    }
-
-    const parsed = JSON.parse(stored)
-    if (parsed && typeof parsed.email === 'string') {
-      return parsed
-    }
-  } catch (error) {
-    console.error('Failed to parse shared identity', error)
-  }
-
-  return null
-}
+const todayKey = () => new Date().toISOString().slice(0, 10)
 
 function getDisplayName(name, email) {
   const trimmed = typeof name === 'string' ? name.trim() : ''
-  if (trimmed) {
-    return trimmed
-  }
-
+  if (trimmed) return trimmed
   const fallback = typeof email === 'string' ? email.split('@')[0] : 'Project member'
   return fallback || 'Project member'
+}
+
+function formatHourLabel(hour) {
+  const suffix = hour >= 12 && hour < 24 ? 'PM' : 'AM'
+  const display = hour % 12 === 0 ? 12 : hour % 12
+  return `${display}:00 ${suffix}`
+}
+
+function formatRange(startHour, endHour) {
+  return `${formatHourLabel(startHour)} – ${formatHourLabel(endHour)}`
 }
 
 function buildWeek(from) {
@@ -62,25 +53,21 @@ function buildWeek(from) {
   })
 }
 
-export default function Calendar({ projectKey = 1 }) {
-  const [currentEmail, setCurrentEmail] = useState(() => getStoredIdentity()?.email || '')
-  const [currentName, setCurrentName] = useState(() => getStoredIdentity()?.name || '')
+function slotsPath(projectKey, email) {
+  return `projects/project-${projectKey}/calendar/users/${emailKey(email)}/slots`
+}
+
+export default function Calendar({ projectKey = 'default', identity = null }) {
+  const currentEmail = normalize(identity?.email)
+  const currentName = identity?.name || ''
+
   const [mySlots, setMySlots] = useState({})
   const [collaborators, setCollaborators] = useState([])
   const [collabSlots, setCollabSlots] = useState({})
   const [weekStart, setWeekStart] = useState(() => new Date())
 
   const days = useMemo(() => buildWeek(weekStart), [weekStart])
-
-  useEffect(() => {
-    const identity = getStoredIdentity()
-    if (identity?.email) {
-      setCurrentEmail(identity.email)
-    }
-    if (identity?.name) {
-      setCurrentName(identity.name)
-    }
-  }, [])
+  const currentDayKey = todayKey()
 
   useEffect(() => {
     if (!currentEmail) {
@@ -88,12 +75,12 @@ export default function Calendar({ projectKey = 1 }) {
       return
     }
 
-    const r = ref(rtdb, `calendar/users/${emailKey(currentEmail)}/slots`)
+    const r = ref(rtdb, slotsPath(projectKey, currentEmail))
     return onValue(r, (snap) => {
       const val = snap.val()
       setMySlots(val && typeof val === 'object' ? val : {})
     })
-  }, [currentEmail])
+  }, [currentEmail, projectKey])
 
   useEffect(() => {
     const membersRef = ref(rtdb, `projects/project-${projectKey}/members`)
@@ -106,8 +93,7 @@ export default function Calendar({ projectKey = 1 }) {
           email: normalize(member.email),
           name: typeof member.name === 'string' ? member.name.trim() : '',
         }))
-        .filter((member) => member.email)
-        .filter((member) => member.email !== normalize(currentEmail))
+        .filter((member) => member.email && member.email !== currentEmail)
 
       setCollaborators(members)
     })
@@ -120,7 +106,7 @@ export default function Calendar({ projectKey = 1 }) {
     }
 
     const unsubs = collaborators.map((member) => {
-      const r = ref(rtdb, `calendar/users/${emailKey(member.email)}/slots`)
+      const r = ref(rtdb, slotsPath(projectKey, member.email))
       return onValue(r, (snap) => {
         const val = snap.val()
         setCollabSlots((prev) => ({
@@ -131,35 +117,76 @@ export default function Calendar({ projectKey = 1 }) {
     })
 
     return () => unsubs.forEach((u) => u && u())
-  }, [collaborators])
+  }, [collaborators, projectKey])
+
+  const recommendations = useMemo(() => {
+    if (!currentEmail) return []
+
+    const allMembers = [
+      { email: currentEmail, name: currentName, slots: mySlots },
+      ...collaborators.map((m) => ({
+        email: m.email,
+        name: m.name,
+        slots: collabSlots[m.email] || {},
+      })),
+    ]
+
+    if (allMembers.length < 2) return []
+
+    const blocks = []
+    for (const day of days) {
+      let runStart = null
+      for (const { hour } of HOURS) {
+        const key = slotKey(day.key, hour)
+        const everyoneFree = allMembers.every((m) => !!m.slots[key])
+        if (everyoneFree) {
+          if (runStart === null) runStart = hour
+        } else if (runStart !== null) {
+          blocks.push({
+            dayKey: day.key,
+            dayLabel: day.label,
+            startHour: runStart,
+            endHour: hour,
+          })
+          runStart = null
+        }
+      }
+      if (runStart !== null) {
+        blocks.push({
+          dayKey: day.key,
+          dayLabel: day.label,
+          startHour: runStart,
+          endHour: END_HOUR,
+        })
+      }
+    }
+
+    // Prefer longer windows; break ties by chronology (already in order).
+    return blocks
+      .sort((a, b) => (b.endHour - b.startHour) - (a.endHour - a.startHour))
+      .slice(0, MAX_RECOMMENDATIONS)
+  }, [days, mySlots, collaborators, collabSlots, currentEmail, currentName])
 
   const toggleSlot = (dayKey, hour) => {
-    if (!currentEmail) {
-      return
-    }
+    if (!currentEmail) return
 
     const key = slotKey(dayKey, hour)
     const next = { ...mySlots }
 
-    if (next[key]) {
-      delete next[key]
-    } else {
-      next[key] = true
-    }
+    if (next[key]) delete next[key]
+    else next[key] = true
 
     setMySlots(next)
-    set(ref(rtdb, `calendar/users/${emailKey(currentEmail)}/slots`), next).catch((err) =>
+    set(ref(rtdb, slotsPath(projectKey, currentEmail)), next).catch((err) =>
       console.error('Failed to save slot:', err)
     )
   }
 
   const clearAll = () => {
-    if (!currentEmail) {
-      return
-    }
+    if (!currentEmail) return
 
     setMySlots({})
-    remove(ref(rtdb, `calendar/users/${emailKey(currentEmail)}/slots`)).catch((err) =>
+    remove(ref(rtdb, slotsPath(projectKey, currentEmail))).catch((err) =>
       console.error('Failed to clear slots:', err)
     )
   }
@@ -176,8 +203,8 @@ export default function Calendar({ projectKey = 1 }) {
     return (
       <section className="component-card" style={styles.card}>
         <h3 style={{ margin: '0 0 8px' }}>Calendar</h3>
-        <p style={{ margin: '0 0 12px', color: '#555' }}>
-          Waiting for your project identity to load so your calendar can sync automatically.
+        <p style={{ margin: 0, color: '#555' }}>
+          Sign in from the project setup screen to use the calendar.
         </p>
       </section>
     )
@@ -198,6 +225,12 @@ export default function Calendar({ projectKey = 1 }) {
         </button>
       </header>
 
+      <RecommendedTimes
+        recommendations={recommendations}
+        memberCount={collaborators.length + 1}
+        hasCollaborators={collaborators.length > 0}
+      />
+
       <div style={styles.weekNav}>
         <button onClick={() => shiftWeek(-1)} style={styles.navBtn}>
           ← Previous week
@@ -215,6 +248,7 @@ export default function Calendar({ projectKey = 1 }) {
         slots={mySlots}
         editable
         onToggle={toggleSlot}
+        todayKey={currentDayKey}
       />
 
       <div style={{ fontSize: '0.9rem', color: '#555', marginBottom: 12 }}>
@@ -222,7 +256,9 @@ export default function Calendar({ projectKey = 1 }) {
       </div>
 
       {collaborators.length === 0 ? (
-        <p style={{ margin: '0 0 12px', color: '#6b7280' }}>Waiting for project members to appear.</p>
+        <p style={{ margin: '0 0 12px', color: '#6b7280' }}>
+          You're the only member so far. Share the project name to invite others.
+        </p>
       ) : null}
 
       {collaborators.map((member) => (
@@ -233,25 +269,80 @@ export default function Calendar({ projectKey = 1 }) {
               <div style={{ fontSize: '0.8rem', color: '#6b7280' }}>{member.email}</div>
             </div>
           </div>
-          <CalendarGrid days={days} slots={collabSlots[member.email] || {}} />
+          <CalendarGrid
+            days={days}
+            slots={collabSlots[member.email] || {}}
+            todayKey={currentDayKey}
+          />
         </div>
       ))}
     </section>
   )
 }
 
-function CalendarGrid({ days, slots, editable = false, onToggle }) {
+function RecommendedTimes({ recommendations, memberCount, hasCollaborators }) {
+  return (
+    <section style={styles.recCard}>
+      <div style={styles.recHeader}>
+        <div>
+          <div style={styles.recTitle}>Recommended meeting times</div>
+          <div style={styles.recSubtitle}>
+            Windows when all {memberCount} project member{memberCount === 1 ? '' : 's'} are marked free.
+          </div>
+        </div>
+      </div>
+      {!hasCollaborators ? (
+        <div style={styles.recEmpty}>
+          Add at least one other member to see shared availability.
+        </div>
+      ) : recommendations.length === 0 ? (
+        <div style={styles.recEmpty}>
+          No fully-overlapping free hours yet. Mark more slots as Free to find common windows.
+        </div>
+      ) : (
+        <ul style={styles.recList}>
+          {recommendations.map((block) => {
+            const duration = block.endHour - block.startHour
+            return (
+              <li key={`${block.dayKey}-${block.startHour}`} style={styles.recItem}>
+                <span style={styles.recItemDay}>{block.dayLabel}</span>
+                <span style={styles.recItemTime}>{formatRange(block.startHour, block.endHour)}</span>
+                <span style={styles.recItemDuration}>
+                  {duration}h
+                </span>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+function CalendarGrid({ days, slots, editable = false, onToggle, todayKey: todayKeyProp }) {
   return (
     <div style={{ overflowX: 'auto', marginBottom: 16 }}>
       <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 720 }}>
         <thead>
           <tr>
             <th style={styles.th}>Time</th>
-            {days.map((day) => (
-              <th key={day.key} style={{ ...styles.th, textAlign: 'center' }}>
-                {day.label}
-              </th>
-            ))}
+            {days.map((day) => {
+              const isToday = day.key === todayKeyProp
+              return (
+                <th
+                  key={day.key}
+                  style={{
+                    ...styles.th,
+                    textAlign: 'center',
+                    background: isToday ? '#dbeafe' : styles.th.background,
+                    color: isToday ? '#1d4ed8' : 'inherit',
+                  }}
+                >
+                  {day.label}
+                  {isToday && <div style={styles.todayPill}>Today</div>}
+                </th>
+              )
+            })}
           </tr>
         </thead>
         <tbody>
@@ -260,9 +351,14 @@ function CalendarGrid({ days, slots, editable = false, onToggle }) {
               <td style={styles.timeCell}>{label}</td>
               {days.map((day) => {
                 const isFree = !!slots[slotKey(day.key, hour)]
+                const isToday = day.key === todayKeyProp
+                const cellStyle = isToday
+                  ? { ...styles.slotCell, background: '#eff6ff' }
+                  : styles.slotCell
+
                 if (editable) {
                   return (
-                    <td key={day.key} style={styles.slotCell}>
+                    <td key={day.key} style={cellStyle}>
                       <button
                         type="button"
                         onClick={() => onToggle(day.key, hour)}
@@ -280,7 +376,7 @@ function CalendarGrid({ days, slots, editable = false, onToggle }) {
                 }
 
                 return (
-                  <td key={day.key} style={styles.slotCell}>
+                  <td key={day.key} style={cellStyle}>
                     <div
                       style={{
                         ...styles.slotView,
@@ -332,6 +428,14 @@ const styles = {
     borderBottom: '2px solid #ddd',
     background: '#f5f5f5',
   },
+  todayPill: {
+    fontSize: '0.65rem',
+    fontWeight: 600,
+    color: '#1d4ed8',
+    marginTop: 2,
+    letterSpacing: '0.04em',
+    textTransform: 'uppercase',
+  },
   timeCell: {
     padding: '10px 8px',
     borderBottom: '1px solid #eee',
@@ -346,7 +450,48 @@ const styles = {
     borderRadius: 8,
     cursor: 'pointer',
   },
-  slotView: { width: '100%', minHeight: 40, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.9rem', border: '1px solid #e5e7eb' },
+  slotView: {
+    width: '100%',
+    minHeight: 40,
+    borderRadius: 8,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '0.9rem',
+    border: '1px solid #e5e7eb',
+  },
   collabCard: { border: '1px solid #e5e7eb', borderRadius: 12, padding: 12, marginBottom: 12 },
   collabCardHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  recCard: {
+    border: '1px solid #bfdbfe',
+    background: '#eff6ff',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 16,
+  },
+  recHeader: { marginBottom: 8 },
+  recTitle: { fontWeight: 600, color: '#1e3a8a' },
+  recSubtitle: { fontSize: '0.85rem', color: '#1e40af' },
+  recEmpty: { fontSize: '0.9rem', color: '#374151' },
+  recList: { listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 6 },
+  recItem: {
+    display: 'grid',
+    gridTemplateColumns: '140px 1fr auto',
+    alignItems: 'center',
+    gap: 12,
+    padding: '8px 10px',
+    background: '#fff',
+    border: '1px solid #bfdbfe',
+    borderRadius: 8,
+  },
+  recItemDay: { fontWeight: 600, color: '#111827' },
+  recItemTime: { color: '#1f2937' },
+  recItemDuration: {
+    fontSize: '0.8rem',
+    fontWeight: 600,
+    color: '#1d4ed8',
+    background: '#dbeafe',
+    padding: '2px 8px',
+    borderRadius: 999,
+  },
 }

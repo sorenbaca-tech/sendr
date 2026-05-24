@@ -274,7 +274,7 @@ function App() {
     const messagesKey = `messages-${keySuffix}-${identity?.name || ''}`
     switch (activeTab) {
       case 'calendar':
-        return <Calendar key={`calendar-${keySuffix}`} projectKey={project.slug} />
+        return <Calendar key={`calendar-${keySuffix}`} projectKey={project.slug} identity={identity} />
       case 'messages':
         return <Messages key={messagesKey} projectKey={project.slug} />
       case 'todo':
